@@ -516,8 +516,8 @@ typedef struct Udata0 {
 */
 typedef struct Upvaldesc {
   TString *name;  /* upvalue name (for debug information) */
-  lu_byte instack;  /* whether it is in stack (register) */
-  lu_byte idx;  /* index of upvalue (in stack or in outer function's list) */
+  lu_byte instack;  /* whether it is in stack (register) 上值是否在栈上*/
+  lu_byte idx;  /* index of upvalue (in stack or in outer function's list) 栈上或者外部函数的列表*/
   lu_byte kind;  /* kind of corresponding variable */
 } Upvaldesc;
 
@@ -627,6 +627,7 @@ typedef struct Proto {
 
 /*
 ** Upvalues for Lua closures
+** 上值是一个函数引用了外部的变量，当该外部变量已关闭，
 */
 typedef struct UpVal {
   CommonHeader;

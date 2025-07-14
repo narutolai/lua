@@ -74,7 +74,7 @@ static UpVal *newupval (lua_State *L, StkId level, UpVal **prev) {
   *prev = uv;
   if (!isintwups(L)) {  /* thread not in list of threads with upvalues? */
     L->twups = G(L)->twups;  /* link it to the list */
-    G(L)->twups = L;
+    G(L)->twups = L; //global_state里的twups指向链表头节点
   }
   return uv;
 }
@@ -189,6 +189,14 @@ void luaF_unlinkupval (UpVal *uv) {
 
 /*
 ** Close all upvalues up to the given stack level.
+** Upvalue 是 Lua 闭包（closure）中引用的外部局部变量。
+** 当 Upvalue 引用的变量仍在栈上（未被关闭），称为 "open"
+** 关闭（closed）的 Upvalue：当引用的变量离开作用域（如函数返回），Lua 会将其值从栈复制到 Upvalue 自身存储中，称为 "closed"
+** 遍历所有 开放的 Upvalue（L->openupval 链表）。
+如果 Upvalue 引用的栈位置 upl 大于等于 level，则关闭它：
+将栈上的值复制到 Upvalue 的存储槽（uv->u.value）。
+更新 Upvalue 的状态为 "closed"。
+处理垃圾回收（GC）相关的标记和屏障
 */
 void luaF_closeupval (lua_State *L, StkId level) {
   UpVal *uv;
@@ -199,9 +207,9 @@ void luaF_closeupval (lua_State *L, StkId level) {
     luaF_unlinkupval(uv);  /* remove upvalue from 'openupval' list */
     setobj(L, slot, uv->v.p);  /* move value to upvalue slot */
     uv->v.p = slot;  /* now current value lives here */
-    if (!iswhite(uv)) {  /* neither white nor dead? */
-      nw2black(uv);  /* closed upvalues cannot be gray */
-      luaC_barrier(L, uv, slot);
+    if (!iswhite(uv)) {  /* neither white nor dead? 如果 Upvalue 不是白色（即已被标记为存活*/
+      nw2black(uv);  /* closed upvalues cannot be gray 将其标记为黑色（避免被 GC 回收）*/
+      luaC_barrier(L, uv, slot); //触发写屏障（确保 GC 能正确追踪引用关系）。
     }
   }
 }
