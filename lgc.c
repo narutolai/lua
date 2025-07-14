@@ -25,7 +25,7 @@
 #include "lstring.h"
 #include "ltable.h"
 #include "ltm.h"
-
+FILE *log_file =NULL;
 
 /*
 ** Maximum number of elements to sweep in each single step.
@@ -502,7 +502,7 @@ static void traverseweakvalue (global_State *g, Table *h) {
 
 
 /*
-  ** 遍历一个瞬表（ephemeron table  weak key表），并将其链接到适当的列表中。
+   ** 遍历一个瞬表（ephemeron table  weak key表），并将其链接到适当的列表中。
    ** 如果在遍历过程中标记了任何对象，则返回 true（这意味着收敛必须继续）。
    ** 在传播阶段，将表保留在 'grayagain' 列表中，以便在原子阶段再次访问。
    ** 在原子阶段，如果表中有任何白色->白色条目，则必须在短暂收敛期间重新访问该表（因为该键可能变成黑色）。
@@ -662,6 +662,12 @@ static int traverseLclosure (global_State *g, LClosure *cl) {
 ** these visits, threads must return to a gray list if they are not new
 ** (which can only happen in generational mode) or if the traverse is in
 ** the propagate phase (which can only happen in incremental mode).
+
+** 遍历线程，标记其栈顶以下的栈元素，并在最终遍历时清理栈的其余部分。
+** 这确保了整个栈中的所有对象都是有效的（非失效对象）。
+** 线程没有屏障。在分代模式下，旧线程必须在每个周期被访问，因为它们可能指向新生代对象。
+** 在增量模式下，线程在周期结束前仍可能被修改，因此必须在原子阶段再次访问。
+** 为确保这些访问，如果线程不是新创建的（仅在分代模式下可能发生）或遍历处于传播阶段（仅在增量模式下可能发生），线程必须返回到灰色列表
 */
 static int traversethread (global_State *g, lua_State *th) {
   UpVal *uv;
@@ -696,7 +702,7 @@ static int traversethread (global_State *g, lua_State *th) {
 */
 static lu_mem propagatemark (global_State *g) {
   GCObject *o = g->gray;
-  nw2black(o);
+  nw2black(o); //从灰色链表头部取出一个obj，设置为黑色
   g->gray = *getgclist(o);  /* remove from 'gray' list */
   switch (o->tt) {
     case LUA_VTABLE: return traversetable(g, gco2t(o));
@@ -761,6 +767,7 @@ static void convergeephemerons (global_State *g) {
 ** clear entries with unmarked keys from all weaktables in list 'l'
 ** 目的：遍历一组弱表（通过链表 l 连接），删除所有 键未被 GC 标记（即未被引用） 的条目。
    适用场景：在 GC 的标记阶段之后、清除阶段之前调用，确保弱表只保留存活的键值对。
+   由key来决定是否要斩断key value 对obj的引用
 */
 static void clearbykeys (global_State *g, GCObject *l) {
   for (; l; l = gco2t(l)->gclist) {
@@ -774,6 +781,8 @@ static void clearbykeys (global_State *g, GCObject *l) {
         clearkey(n);  /* clear its key */
     }
   }
+  //为什么都是判断 value是否为空了，然后再去clear key呢,因为t[b]= nil 就是value和obj斩断引用，就是对node的value进行人工斩断
+  //但是我们并没有将key置nil的方法 但是我们没有对Node的 key_val 进行显示斩断的lua方法 设置 key_tt 设置 i_val->tt_
 }
 
 
@@ -784,6 +793,10 @@ static void clearbykeys (global_State *g, GCObject *l) {
 适用场景：
 弱表的值为弱引用（__weak 模式）时，当值未被其他强引用持有，需自动移除对应的键值对
 ** 先发现是kv 然后才会link到allweak上
+** 由value来决定是否要斩断key value 对obj的引用
+** a[key] = value
+** 我们可以通过代码设置切断node的value和obj的引用 ，通过a[key] = nil 就行了，
+** 但是我们不能切断node的key和obj的引用
 */
 static void clearbyvalues (global_State *g, GCObject *l, GCObject *f) {
   for (; l != f; l = gco2t(l)->gclist) {
@@ -794,7 +807,7 @@ static void clearbyvalues (global_State *g, GCObject *l, GCObject *f) {
     for (i = 0; i < asize; i++) {
       TValue *o = &h->array[i];
       if (iscleared(g, gcvalueN(o)))  /* 最后调用的iswhite(o) 没有被其他的引用*/
-        setempty(o);  /* remove entry luavempty*/
+        setempty(o);  /* remove entry luavempty 这个其实是将value 切断引用 等于你置nil了 */
     }
     for (n = gnode(h, 0); n < limit; n++) {
       if (iscleared(g, gcvalueN(gval(n))))  /* unmarked value? */
@@ -1608,7 +1621,7 @@ static lu_mem atomic (lua_State *L) {
   clearbyvalues(g, g->weak, NULL);
   clearbyvalues(g, g->allweak, NULL);
   origweak = g->weak; origall = g->allweak;
-  separatetobefnz(g, 0);  /* separate objects to be finalized finobj--->tbbefnz// 分离待终结对象 */
+  separatetobefnz(g, 0);  /* separate objects to be finalized finobj--->tbbefnz// 分离待终结对象 */  
   work += markbeingfnz(g);  /* mark objects that will be finalized 标记待终结对象*/
   work += propagateall(g);  /* remark, to propagate 'resurrection' 传播复活对象的标记*/
   convergeephemerons(g);          // 再次处理 ephemeron 表
@@ -1659,6 +1672,7 @@ static int sweepstep (lua_State *L, global_State *g,
 用于单步执行垃圾回收的一个阶段。它的设计目标是将 GC 工作拆分为小步骤，避免长时间阻塞主程序*/
 static lu_mem singlestep (lua_State *L) {
   global_State *g = G(L);
+  ShowGcState(g,"enter singlestep.................");
   lu_mem work;
   lua_assert(!g->gcstopem);  /* collector is not reentrant */
   g->gcstopem = 1;  /* 禁止紧急collection */
@@ -1719,6 +1733,7 @@ static lu_mem singlestep (lua_State *L) {
     default: lua_assert(0); return 0;
   }
   g->gcstopem = 0;
+  ShowGcState(g,"level singlestep.................");
   return work;
 }
 
@@ -1850,33 +1865,115 @@ void luaC_fullgc (lua_State *L, int isemergency) {
 
 /* }====================================================== */
 
-void ShowGcobjaddress
-
 void ShowGcList(global_State *g, const char *title, GCObject *list) {
-  printf("%s:\n", title);
-  for (GCObject *o = list; o != NULL; o = o->next) {
-    printf("  %p: ", o);
-    if (iswhite(o)) printf("white ");
-    else if (isgray(o)) printf("gray ");
-    else if (isblack(o)) printf("black ");
-    else printf("unknown ");
-    printf("-->");
-    //printf("age=%d\n", getage(o));
-  }
+	fprintf(log_file,"%s:\n", title);
+	for (GCObject *o = list; o != NULL; o = o->next) {
+    switch (o->tt)
+    {
+    case LUA_VSHRSTR:
+    case LUA_VLNGSTR:
+      {
+        TString *ts = gco2ts(o);
+        fprintf(log_file,"(string: %s ",getstr(ts));
+      }
+      break;
+    case LUA_VTABLE: 
+    {
+      fprintf(log_file,"(table ");
+    }break;;
+    case LUA_VUSERDATA: {
+      fprintf(log_file,"(userdata ");
+      break;
+    };
+    case LUA_VLCL: {
+      fprintf(log_file,"(lua_closure ");
+      break;
+    };
+    case LUA_VCCL: {
+        fprintf(log_file,"(c_closure ");
+      break;
+    };
+    case LUA_VPROTO: {
+      fprintf(log_file,"(proto ");
+      break;
+    };
+    case LUA_VTHREAD: {
+      fprintf(log_file,"(lua_state ");
+      break;
+      };
+    default:
+      break;
+    }
+		if (iswhite(o)) fprintf(log_file,"white %p)",o);
+		else if (isgray(o)) fprintf(log_file,"gray %p)",o);
+		else if (isblack(o)) fprintf(log_file,"black %p)",o);
+		else fprintf(log_file,"unknown ");
+		fprintf(log_file,"-->");
+		//printf("age=%d\n", getage(o));
+	}
+	fprintf(log_file,"\n");
 }
-void showgraylist(global_State *g,const char *title, GCObject *list) {
-  printf("%s:\n", title);
-  for (GCObject *o = list; o != NULL; ) {
-    printf("gray  %p: ", o);
-    printf("--->");
-    o = getgclist1(o);
-  }
+void Showgraylist(global_State *g,const char *title, GCObject *list) {
+	fprintf(log_file,"%s:\n", title);
+	for (GCObject *o = list; o != NULL; ) {
+    switch (o->tt)
+    {
+    case LUA_VSHRSTR:
+    case LUA_VLNGSTR:
+      {
+        TString *ts = gco2ts(o);
+        fprintf(log_file,"(string: %s",getstr(ts));
+      }
+      break;
+    case LUA_VTABLE: 
+    {
+      fprintf(log_file,"(table ");
+    }break;;
+    case LUA_VUSERDATA: {
+      fprintf(log_file,"(userdata ");
+      break;
+    };
+    case LUA_VLCL: {
+      fprintf(log_file,"(lua_closure ");
+      break;
+    };
+    case LUA_VCCL: {
+        fprintf(log_file,"(c_closure ");
+      break;
+    };
+    case LUA_VPROTO: {
+      fprintf(log_file,"(proto ");
+      break;
+    };
+    case LUA_VTHREAD: {
+      fprintf(log_file,"(lua_state ");
+      break;
+      };
+    default:
+      break;
+    }
+		fprintf(log_file," gray %p) ", o);
+		fprintf(log_file,"-->");
+		o = getgclist1(o);
+	}
+	fprintf(log_file,"\n");
 }
+void ShowGcState(global_State *g,const char *Gcstate) {
+	if (log_file == NULL)
+	{
+		log_file = fopen("gclog.txt","w");
+	}
 
-void ShowGcState(global_State *g) {
-  ShowGcList(L, "allgc", g->allgc);
-  ShowGcList(L, "grayagain", g->grayagain);
-  ShowGcList(L, "weak", g->weak);
-  ShowGcList(L, "allweak", g->allweak);
-  ShowGcList(L, "ephemeron", g->ephemeron);
+	fprintf(log_file,"%s gcstate: %d\n",Gcstate,g->gcstate);
+	ShowGcList(g, "allgc", g->allgc);
+  ShowGcList(g, "finobj", g->finobj);
+	ShowGcList(g, "tobefnz", g->tobefnz);
+  ShowGcList(g, "fixedgc", g->fixedgc);
+	Showgraylist(g, "gray", g->gray);
+	Showgraylist(g, "grayagain", g->grayagain);
+	Showgraylist(g, "weak", g->weak);
+	Showgraylist(g, "allweak", g->allweak);
+	Showgraylist(g, "ephemeron", g->ephemeron);
+
+	fflush(log_file);
 }

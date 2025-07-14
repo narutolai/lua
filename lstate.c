@@ -215,27 +215,28 @@ static void freestack (lua_State *L) {
 */
 static void init_registry (lua_State *L, global_State *g) {
   /* create registry */
-  Table *registry = luaH_new(L);
-  sethvalue(L, &g->l_registry, registry);
+  Table *registry = luaH_new(L); //通过在luaC_newobj函数打断点,发现这个是第一张表
+  sethvalue(L, &g->l_registry, registry); //这个全局注册表 所有的co都共享这个全局注册表
   luaH_resize(L, registry, LUA_RIDX_LAST, 0);
-  /* registry[LUA_RIDX_MAINTHREAD] = L */
+  /* registry[LUA_RIDX_MAINTHREAD] = L registry[0] = L*/
   setthvalue(L, &registry->array[LUA_RIDX_MAINTHREAD - 1], L);
-  /* registry[LUA_RIDX_GLOBALS] = new table (table of globals) */
-  sethvalue(L, &registry->array[LUA_RIDX_GLOBALS - 1], luaH_new(L));
+  /* registry[LUA_RIDX_GLOBALS] = new table (table of globals) registry[1] = _G*/
+  sethvalue(L, &registry->array[LUA_RIDX_GLOBALS - 1], luaH_new(L)); ////通过在luaC_newobj函数打断点,发现这个是第2张表
 }
 
 
 /*
 ** open parts of the state that may cause memory-allocation errors.
+** 这些函数可能导致 内存分配错误
 */
 static void f_luaopen (lua_State *L, void *ud) {
   global_State *g = G(L);
   UNUSED(ud);
   stack_init(L, L);  /* init stack */
-  init_registry(L, g);
-  luaS_init(L);
-  luaT_init(L);
-  luaX_init(L);
+  init_registry(L, g); //初始化全局注册表
+  luaS_init(L);       //初始化string table and the string cache 也是属于global_state的
+  luaT_init(L);       //原方法字符串初始化
+  luaX_init(L);       //保留保留字
   g->gcstp = 0;  /* allow gc */
   setnilvalue(&g->nilvalue);  /* now state is complete */
   luai_userstateopen(L);

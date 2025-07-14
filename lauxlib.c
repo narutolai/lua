@@ -932,6 +932,7 @@ LUALIB_API const char *luaL_tolstring (lua_State *L, int idx, size_t *len) {
 ** set functions from list 'l' into table at top - 'nup'; each
 ** function gets the 'nup' elements at the top as upvalues.
 ** Returns with only the table at the stack.
+** 将l里的函数设置到栈顶-nup的表，同时可以设置函数的上值
 */
 LUALIB_API void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
   luaL_checkstack(L, nup, "too many upvalues");
@@ -976,7 +977,7 @@ LUALIB_API int luaL_getsubtable (lua_State *L, int idx, const char *fname) {
 */
 LUALIB_API void luaL_requiref (lua_State *L, const char *modname,
                                lua_CFunction openf, int glb) {
-  luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
+  luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);//这里是希望在register中找到_LOADED表
   lua_getfield(L, -1, modname);  /* LOADED[modname] */
   if (!lua_toboolean(L, -1)) {  /* package not already loaded? */
     lua_pop(L, 1);  /* remove field */
@@ -989,7 +990,7 @@ LUALIB_API void luaL_requiref (lua_State *L, const char *modname,
   lua_remove(L, -2);  /* remove LOADED table */
   if (glb) {
     lua_pushvalue(L, -1);  /* copy of module */
-    lua_setglobal(L, modname);  /* _G[modname] = module */
+    lua_setglobal(L, modname);  /* _G[modname] = module 同时在_G中也搞一份引用*/
   }
 }
 

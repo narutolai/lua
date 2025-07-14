@@ -538,10 +538,10 @@ static const luaL_Reg base_funcs[] = {
   {NULL, NULL}
 };
 
-
+ 
 LUAMOD_API int luaopen_base (lua_State *L) {
   /* open lib into global table */
-  lua_pushglobaltable(L);
+  lua_pushglobaltable(L); //获取全局表 就是register[1] 那个表
   luaL_setfuncs(L, base_funcs, 0);
   /* set global _G */
   lua_pushvalue(L, -1);
