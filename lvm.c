@@ -787,8 +787,8 @@ lua_Integer luaV_shiftl (lua_Integer x, lua_Integer y) {
 */
 static void pushclosure (lua_State *L, Proto *p, UpVal **encup, StkId base,
                          StkId ra) {
-  int nup = p->sizeupvalues;
-  Upvaldesc *uv = p->upvalues;
+  int nup = p->sizeupvalues; //p的上值个数
+  Upvaldesc *uv = p->upvalues; //上值描述
   int i;
   LClosure *ncl = luaF_newLclosure(L, nup);
   ncl->p = p;
@@ -862,7 +862,7 @@ void luaV_finishOp (lua_State *L) {
       break;
     }
     default: {
-      /* only these other opcodes can yield */
+      /* only these other opcodes can yield 只有下面的指令可以挂起*/
       lua_assert(op == OP_TFORCALL || op == OP_CALL ||
            op == OP_TAILCALL || op == OP_SETTABUP || op == OP_SETTABLE ||
            op == OP_SETI || op == OP_SETFIELD);

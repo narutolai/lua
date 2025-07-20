@@ -411,8 +411,8 @@ static void markupval (FuncState *fs, int level) {
   BlockCnt *bl = fs->bl;
   while (bl->nactvar > level)
     bl = bl->previous;
-  bl->upval = 1;
-  fs->needclose = 1;
+  bl->upval = 1;        // 标记该作用域块有变量被捕获为 Upvalue
+  fs->needclose = 1;    // 通知编译器后续需要生成 OP_CLOSE 指令
 }
 
 

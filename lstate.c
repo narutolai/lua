@@ -85,6 +85,7 @@ static unsigned int luai_makeseed (lua_State *L) {
 /*
 ** set GCdebt to a new value keeping the value (totalbytes + GCdebt)
 ** invariant (and avoiding underflows in 'totalbytes')
+** è®¾ç½®GCdebtï¼Œä½†æ˜¯è¦ä¿è¯ totalbytes + GCdebtçš„å€¼ä¸å˜
 */
 void luaE_setdebt (global_State *g, l_mem debt) {
   l_mem tb = gettotalbytes(g);
@@ -215,28 +216,28 @@ static void freestack (lua_State *L) {
 */
 static void init_registry (lua_State *L, global_State *g) {
   /* create registry */
-  Table *registry = luaH_new(L); //Í¨¹ýÔÚluaC_newobjº¯Êý´ò¶Ïµã,·¢ÏÖÕâ¸öÊÇµÚÒ»ÕÅ±í
-  sethvalue(L, &g->l_registry, registry); //Õâ¸öÈ«¾Ö×¢²á±í ËùÓÐµÄco¶¼¹²ÏíÕâ¸öÈ«¾Ö×¢²á±í
+  Table *registry = luaH_new(L); //Í¨ï¿½ï¿½ï¿½ï¿½luaC_newobjï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ïµï¿½,ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Çµï¿½Ò»ï¿½Å±ï¿½
+  sethvalue(L, &g->l_registry, registry); //ï¿½ï¿½ï¿½È«ï¿½ï¿½×¢ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ðµï¿½coï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È«ï¿½ï¿½×¢ï¿½ï¿½ï¿½
   luaH_resize(L, registry, LUA_RIDX_LAST, 0);
   /* registry[LUA_RIDX_MAINTHREAD] = L registry[0] = L*/
   setthvalue(L, &registry->array[LUA_RIDX_MAINTHREAD - 1], L);
   /* registry[LUA_RIDX_GLOBALS] = new table (table of globals) registry[1] = _G*/
-  sethvalue(L, &registry->array[LUA_RIDX_GLOBALS - 1], luaH_new(L)); ////Í¨¹ýÔÚluaC_newobjº¯Êý´ò¶Ïµã,·¢ÏÖÕâ¸öÊÇµÚ2ÕÅ±í
+  sethvalue(L, &registry->array[LUA_RIDX_GLOBALS - 1], luaH_new(L)); ////Í¨ï¿½ï¿½ï¿½ï¿½luaC_newobjï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ïµï¿½,ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Çµï¿½2ï¿½Å±ï¿½
 }
 
 
 /*
 ** open parts of the state that may cause memory-allocation errors.
-** ÕâÐ©º¯Êý¿ÉÄÜµ¼ÖÂ ÄÚ´æ·ÖÅä´íÎó
+** ï¿½ï¿½Ð©ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Üµï¿½ï¿½ï¿½ ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 */
 static void f_luaopen (lua_State *L, void *ud) {
   global_State *g = G(L);
   UNUSED(ud);
   stack_init(L, L);  /* init stack */
-  init_registry(L, g); //³õÊ¼»¯È«¾Ö×¢²á±í
-  luaS_init(L);       //³õÊ¼»¯string table and the string cache Ò²ÊÇÊôÓÚglobal_stateµÄ
-  luaT_init(L);       //Ô­·½·¨×Ö·û´®³õÊ¼»¯
-  luaX_init(L);       //±£Áô±£Áô×Ö
+  init_registry(L, g); //ï¿½ï¿½Ê¼ï¿½ï¿½È«ï¿½ï¿½×¢ï¿½ï¿½ï¿½
+  luaS_init(L);       //ï¿½ï¿½Ê¼ï¿½ï¿½string table and the string cache Ò²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½global_stateï¿½ï¿½
+  luaT_init(L);       //Ô­ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½ï¿½ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½
+  luaX_init(L);       //ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
   g->gcstp = 0;  /* allow gc */
   setnilvalue(&g->nilvalue);  /* now state is complete */
   luai_userstateopen(L);

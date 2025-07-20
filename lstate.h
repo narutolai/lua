@@ -310,7 +310,7 @@ struct lua_State {
   CommonHeader;
   lu_byte status;
   lu_byte allowhook;
-  unsigned short nci;  /* number of items in 'ci' list */
+  unsigned short nci;  /* number of items in 'ci' list ci链表的长度*/
   StkIdRel top;  /* first free slot in the stack */
   global_State *l_G;
   CallInfo *ci;  /* call info for current function */
