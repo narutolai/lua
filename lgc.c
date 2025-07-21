@@ -1422,7 +1422,7 @@ static void enterinc (global_State *g) {
 
 /*
 ** Change collector mode to 'newmode'.
-*/
+*/    
 void luaC_changemode (lua_State *L, int newmode) {
   global_State *g = G(L);
   if (newmode != g->gckind) {
