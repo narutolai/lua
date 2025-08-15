@@ -247,7 +247,7 @@ l_sinline Node *mainpositionfromnode (const Table *t, Node *nd) {
 */
 static int equalkey (const TValue *k1, const Node *n2, int deadok) {
   if ((rawtt(k1) != keytt(n2)) &&  /* not the same variants? */
-       !(deadok && keyisdead(n2) && iscollectable(k1)))
+       !(deadok && keyisdead(n2) && iscollectable(k1))) /*如果允许死键（deadok为真）、且 n2 是死键、且 k1 是可回收类型，*/
    return 0;  /* cannot be same key */
   switch (keytt(n2)) {
     case LUA_VNIL: case LUA_VFALSE: case LUA_VTRUE:
