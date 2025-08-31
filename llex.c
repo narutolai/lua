@@ -2,6 +2,7 @@
 ** $Id: llex.c $
 ** Lexical Analyzer
 ** See Copyright Notice in lua.h
+** 词法分析
 */
 
 #define llex_c
@@ -26,9 +27,9 @@
 #include "lstring.h"
 #include "ltable.h"
 #include "lzio.h"
-
-
-
+#include <stdio.h>
+FILE *llex_file = NULL;
+//词法分析
 #define next(ls)	(ls->current = zgetc(ls->z))
 
 
@@ -575,6 +576,7 @@ void luaX_next (LexState *ls) {
   }
   else
     ls->t.token = llex(ls, &ls->t.seminfo);  /* read next token */
+  ShowParseLog(ls);
 }
 
 
@@ -582,5 +584,83 @@ int luaX_lookahead (LexState *ls) {
   lua_assert(ls->lookahead.token == TK_EOS);
   ls->lookahead.token = llex(ls, &ls->lookahead.seminfo);
   return ls->lookahead.token;
+}
+const char* reserved_to_string(int token) {
+    switch (token) {
+        case TK_AND: return "TK_AND";
+        case TK_BREAK: return "TK_BREAK";
+        case TK_DO: return "TK_DO";
+        case TK_ELSE: return "TK_ELSE";
+        case TK_ELSEIF: return "TK_ELSEIF";
+        case TK_END: return "TK_END";
+        case TK_FALSE: return "TK_FALSE";
+        case TK_FOR: return "TK_FOR";
+        case TK_FUNCTION: return "TK_FUNCTION";
+        case TK_GOTO: return "TK_GOTO";
+        case TK_IF: return "TK_IF";
+        case TK_IN: return "TK_IN";
+        case TK_LOCAL: return "TK_LOCAL";
+        case TK_NIL: return "TK_NIL";
+        case TK_NOT: return "TK_NOT";
+        case TK_OR: return "TK_OR";
+        case TK_REPEAT: return "TK_REPEAT";
+        case TK_RETURN: return "TK_RETURN";
+        case TK_THEN: return "TK_THEN";
+        case TK_TRUE: return "TK_TRUE";
+        case TK_UNTIL: return "TK_UNTIL";
+        case TK_WHILE: return "TK_WHILE";
+        case TK_IDIV: return "TK_IDIV";
+        case TK_CONCAT: return "TK_CONCAT";
+        case TK_DOTS: return "TK_DOTS";
+        case TK_EQ: return "TK_EQ";
+        case TK_GE: return "TK_GE";
+        case TK_LE: return "TK_LE";
+        case TK_NE: return "TK_NE";
+        case TK_SHL: return "TK_SHL";
+        case TK_SHR: return "TK_SHR";
+        case TK_DBCOLON: return "TK_DBCOLON";
+        case TK_EOS: return "TK_EOS";
+        case TK_FLT: return "TK_FLT";
+        case TK_INT: return "TK_INT";
+        case TK_NAME: return "TK_NAME";
+        case TK_STRING: return "TK_STRING";
+        default: return "UNKNOWN_TOKEN";
+    }
+}
+
+void ShowParseLog(LexState *ls)
+{
+  if(llex_file == NULL)
+  {
+    llex_file = fopen("parse.txt","w");
+  }
+  if(llex_file == NULL)
+  {
+    return ;
+  }
+  int token = ls->t.token;
+  const char *str = reserved_to_string(token);
+  fprintf(llex_file,"luaX_next token_type: %s",str);
+  if (token == TK_NAME)
+  {
+    fprintf(llex_file,": %s",ls->t.seminfo.ts->contents);
+  }
+  else if(token == TK_STRING)
+  {
+fprintf(llex_file,": %s",ls->t.seminfo.ts->contents);
+  }
+  else if (token == TK_FLT)
+  {
+fprintf(llex_file,": %d",ls->t.seminfo.r);
+  }
+  else if (token == TK_INT)
+  {
+fprintf(llex_file,": %d",ls->t.seminfo.i);
+  }
+  else if(strcmp(str,"UNKNOWN_TOKEN") == 0)
+{
+  fprintf(llex_file,": %c",token);
+}
+    fprintf(llex_file,"\n");
 }
 

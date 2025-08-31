@@ -47,14 +47,14 @@ enum RESERVED {
 
 
 typedef union {
-  lua_Number r;
-  lua_Integer i;
-  TString *ts;
+  lua_Number r; //浮点数
+  lua_Integer i; //整数
+  TString *ts;   //字符串
 } SemInfo;  /* semantics information */
 
 
 typedef struct Token {
-  int token;
+  int token; //这个token是RESERVED里的枚举类型
   SemInfo seminfo;
 } Token;
 

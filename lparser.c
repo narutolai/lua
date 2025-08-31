@@ -27,8 +27,9 @@
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
-
-
+#include <stdio.h>
+FILE *lparse_file = NULL;
+//语法分析
 
 /* maximum number of local variables per function (must be smaller
    than 250, due to the bytecode format) */
