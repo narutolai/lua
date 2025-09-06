@@ -12,7 +12,7 @@
 
 #include <limits.h>
 #include <string.h>
-
+#include <stdlib.h>
 #include "lua.h"
 
 #include "lcode.h"
@@ -28,8 +28,144 @@
 #include "lstring.h"
 #include "ltable.h"
 #include <stdio.h>
-FILE *lparse_file = NULL;
+FILE *llex_file;
 //语法分析
+
+void ShowParselog(const char* logstr)
+{
+  if (llex_file == NULL)
+  {
+    llex_file = fopen("parse.txt","w");
+  }
+  fprintf(llex_file,"%s\n",logstr);
+}
+
+char* log_expdesc(const expdesc *exp) {
+    if (exp == NULL) {
+        char *result = malloc(20);
+        strcpy(result, "expdesc: NULL");
+        return result;
+    }
+    
+    // 计算缓冲区大小
+    size_t buffer_size = 512;
+    char *buffer = malloc(buffer_size);
+    if (buffer == NULL) {
+        return NULL;
+    }
+    
+    char *pos = buffer;
+    int remaining = buffer_size;
+    int written;
+    
+    // 输出基本信息和类型
+    const char *kind_str;
+    switch (exp->k) {
+        case VVOID:     kind_str = "VVOID"; break;
+        case VNIL:      kind_str = "VNIL"; break;
+        case VTRUE:     kind_str = "VTRUE"; break;
+        case VFALSE:    kind_str = "VFALSE"; break;
+        case VK:        kind_str = "VK"; break;
+        case VKFLT:     kind_str = "VKFLT"; break;
+        case VKINT:     kind_str = "VKINT"; break;
+        case VKSTR:     kind_str = "VKSTR"; break;
+        case VNONRELOC: kind_str = "VNONRELOC"; break;
+        case VLOCAL:    kind_str = "VLOCAL"; break;
+        case VUPVAL:    kind_str = "VUPVAL"; break;
+        case VCONST:    kind_str = "VCONST"; break;
+        case VINDEXED:  kind_str = "VINDEXED"; break;
+        case VINDEXUP:  kind_str = "VINDEXUP"; break;
+        case VINDEXI:   kind_str = "VINDEXI"; break;
+        case VINDEXSTR: kind_str = "VINDEXSTR"; break;
+        case VJMP:      kind_str = "VJMP"; break;
+        case VRELOC:    kind_str = "VRELOC"; break;
+        case VCALL:     kind_str = "VCALL"; break;
+        case VVARARG:   kind_str = "VVARARG"; break;
+        default:        kind_str = "UNKNOWN";
+    }
+    
+    written = snprintf(pos, remaining, 
+                     "expdesc { k=%s(%d), t=%d, f=%d, u=",
+                     kind_str, exp->k, exp->t, exp->f);
+    if (written < 0 || written >= remaining) {
+        free(buffer);
+        return NULL;
+    }
+    pos += written;
+    remaining -= written;
+    
+    // 根据类型输出 union 字段
+    switch (exp->k) {
+        case VKINT:
+            written = snprintf(pos, remaining, "{ival=%lld}", (long long)exp->u.ival);
+            break;
+            
+        case VKFLT:
+            written = snprintf(pos, remaining, "{nval=%f}", (double)exp->u.nval);
+            break;
+            
+        case VKSTR:
+            written = snprintf(pos, remaining, "{strval=%p", (void*)exp->u.strval);
+            pos += written;
+            remaining -= written;
+            
+            if (exp->u.strval != NULL) {
+                written = snprintf(pos, remaining, "(\"%s\")}", exp->u.strval->contents);
+            } else {
+                written = snprintf(pos, remaining, "(NULL)}");
+            }
+            break;
+            
+        case VLOCAL:
+            written = snprintf(pos, remaining, 
+                             "{var.ridx=%u, var.vidx=%u}",
+                             (unsigned int)exp->u.var.ridx,
+                             (unsigned int)exp->u.var.vidx);
+            break;
+            
+        case VINDEXED:
+        case VINDEXUP:
+        case VINDEXI:
+        case VINDEXSTR:
+            written = snprintf(pos, remaining, 
+                             "{ind.t=%u, ind.idx=%d}",
+                             (unsigned int)exp->u.ind.t,
+                             exp->u.ind.idx);
+            break;
+            
+        case VK:
+        case VUPVAL:
+        case VCONST:
+        case VNONRELOC:
+        case VJMP:
+        case VRELOC:
+        case VCALL:
+        case VVARARG:
+            written = snprintf(pos, remaining, "{info=%d}", exp->u.info);
+            break;
+            
+        case VVOID:
+        case VNIL:
+        case VTRUE:
+        case VFALSE:
+        default:
+            written = snprintf(pos, remaining, "{}");
+            break;
+    }
+    
+    if (written < 0 || written >= remaining) {
+        free(buffer);
+        return NULL;
+    }
+    pos += written;
+    remaining -= written;
+    
+    // 结束
+    written = snprintf(pos, remaining, " }");
+    
+    return buffer;
+}
+
 
 /* maximum number of local variables per function (must be smaller
    than 250, due to the bytecode format) */
@@ -57,7 +193,41 @@ typedef struct BlockCnt {
   lu_byte insidetbc;  /* true if inside the scope of a to-be-closed var. */
 } BlockCnt;
 
-
+char* log_blockcnt(const BlockCnt *blk) {
+    if (blk == NULL) {
+        char *result = malloc(20);
+        strcpy(result, "BlockCnt: NULL");
+        return result;
+    }
+    
+    // 计算大致需要的缓冲区大小
+    size_t buffer_size = 256;
+    char *buffer = malloc(buffer_size);
+    if (buffer == NULL) {
+        return NULL;
+    }
+    
+    // 格式化输出
+    snprintf(buffer, buffer_size, 
+             "BlockCnt { "
+             "previous=%p, "
+             "firstlabel=%d, "
+             "firstgoto=%d, "
+             "nactvar=%u, "
+             "upval=%s, "
+             "isloop=%s, "
+             "insidetbc=%s "
+             "}",
+             (void*)blk->previous,
+             blk->firstlabel,
+             blk->firstgoto,
+             (unsigned int)blk->nactvar,
+             blk->upval ? "true" : "false",
+             blk->isloop ? "true" : "false",
+             blk->insidetbc ? "true" : "false");
+    
+    return buffer;
+}
 
 /*
 ** prototypes for recursive non-terminal functions
@@ -148,12 +318,38 @@ static TString *str_checkname (LexState *ls) {
   luaX_next(ls);
   return ts;
 }
+const char* expkind_to_string(expkind kind) {
+  switch (kind) {
+    case VVOID:      return "VVOID";      /* 当 'expdesc' 描述一个列表的最后一个表达式时，这种类型表示一个空列表（即没有表达式） */
+    case VNIL:       return "VNIL";       /* 常量 nil */
+    case VTRUE:     return "VTRUE";      /* 常量 true */
+    case VFALSE:    return "VFALSE";     /* 常量 false */
+    case VK:        return "VK";         /* 常量在 'k' 中；info = 常量在 'k' 中的索引 */
+    case VKFLT:     return "VKFLT";      /* 浮点常量；nval = 数值浮点值 */
+    case VKINT:     return "VKINT";      /* 整数常量；ival = 数值整数值 */
+    case VKSTR:     return "VKSTR";      /* 字符串常量；strval = TString 地址（字符串由词法分析器固定） */
+    case VNONRELOC: return "VNONRELOC";  /* 表达式的值在一个固定的寄存器中；info = 结果寄存器 */
+    case VLOCAL:    return "VLOCAL";     /* 局部变量；var.ridx = 寄存器索引；var.vidx = 在 'actvar.arr' 中的相对索引 */
+    case VUPVAL:    return "VUPVAL";     /* 上值变量；info = 上值在 'upvalues' 中的索引 */
+    case VCONST:    return "VCONST";     /* 编译时 <const> 变量；info = 在 'actvar.arr' 中的绝对索引 */
+    case VINDEXED:  return "VINDEXED";   /* 索引变量；ind.t = 表在的寄存器index；ind.idx = 键的 R 索引 */
+    case VINDEXUP:  return "VINDEXUP";   /* 索引上值；ind.t = 表在上值的index；ind.idx = 键的 K 索引 */
+    case VINDEXI:   return "VINDEXI";    /* 带有常量整数的索引变量；ind.t = 表寄存器；ind.idx = 键的值 */
+    case VINDEXSTR: return "VINDEXSTR";  /* 带有字面字符串的索引变量；ind.t = 表寄存器；ind.idx = 键的 K 索引 */
+    case VJMP:      return "VJMP";       /* 表达式是一个测试/比较；info = 对应跳转指令的程序计数器 */
+    case VRELOC:    return "VRELOC";     /* 表达式可以将结果放在任何寄存器中；info = 指令的程序计数器 */
+    case VCALL:     return "VCALL";      /* 表达式是一个函数调用；info = 指令的程序计数器 */
+    case VVARARG:   return "VVARARG";    /* 可变参数表达式；info = 指令的程序计数器 */
+    default:        return "UNKNOWN";    /* 处理未知的枚举值 */
+  }
+}
 
 
 static void init_exp (expdesc *e, expkind k, int i) {
   e->f = e->t = NO_JUMP;
   e->k = k;
   e->u.info = i;
+  fprintf(llex_file,"init_exp  %s\n", log_expdesc(e));
 }
 
 
@@ -161,6 +357,7 @@ static void codestring (expdesc *e, TString *s) {
   e->f = e->t = NO_JUMP;
   e->k = VKSTR;
   e->u.strval = s;
+  fprintf(llex_file,"init_exp  %s\n", log_expdesc(e));
 }
 
 
@@ -172,6 +369,7 @@ static void codename (LexState *ls, expdesc *e) {
 /*
 ** Register a new local variable in the active 'Proto' (for debug
 ** information).
+** 注册一个局部变量到proto里
 */
 static int registerlocalvar (LexState *ls, FuncState *fs, TString *varname) {
   Proto *f = fs->f;
@@ -190,8 +388,10 @@ static int registerlocalvar (LexState *ls, FuncState *fs, TString *varname) {
 /*
 ** Create a new local variable with the given 'name'. Return its index
 ** in the function.
+** 给定name 创建一个新的局部变量,返回变量在函数里的index
 */
 static int new_localvar (LexState *ls, TString *name) {
+  //fprintf(llex_file,"create a new localval: %s in Dyndata\n",name->contents);
   lua_State *L = ls->L;
   FuncState *fs = ls->fs;
   Dyndata *dyd = ls->dyd;
@@ -263,12 +463,15 @@ static LocVar *localdebuginfo (FuncState *fs, int vidx) {
 
 /*
 ** Create an expression representing variable 'vidx'
+** local a = {}
+** a[1] = 1
 */
 static void init_var (FuncState *fs, expdesc *e, int vidx) {
   e->f = e->t = NO_JUMP;
   e->k = VLOCAL;
   e->u.var.vidx = vidx;
   e->u.var.ridx = getlocalvardesc(fs, vidx)->vd.ridx;
+  fprintf(llex_file,"init_var  %s\n", log_expdesc(e));
 }
 
 
@@ -310,21 +513,23 @@ static void check_readonly (LexState *ls, expdesc *e) {
 ** Start the scope for the last 'nvars' created variables.
 */
 static void adjustlocalvars (LexState *ls, int nvars) {
-  FuncState *fs = ls->fs;
-  int reglevel = luaY_nvarstack(fs);
+  FuncState *fs = ls->fs;                    // 获取当前函数的编译状态
+  int reglevel = luaY_nvarstack(fs);         // 获取当前栈层级
   int i;
-  for (i = 0; i < nvars; i++) {
-    int vidx = fs->nactvar++;
-    Vardesc *var = getlocalvardesc(fs, vidx);
-    var->vd.ridx = reglevel++;
-    var->vd.pidx = registerlocalvar(ls, fs, var->vd.name);
+  for (i = 0; i < nvars; i++) {              // 为每个新变量处理
+    int vidx = fs->nactvar++;                // 激活变量计数增加
+    Vardesc *var = getlocalvardesc(fs, vidx); // 获取变量描述符
+    var->vd.ridx = reglevel++;               // 分配寄存器索引
+    var->vd.pidx = registerlocalvar(ls, fs, var->vd.name); // 注册局部变量
   }
 }
+
 
 
 /*
 ** Close the scope for all variables up to level 'tolevel'.
 ** (debug info.)
+** 移除
 */
 static void removevars (FuncState *fs, int tolevel) {
   fs->ls->dyd->actvar.n -= (fs->nactvar - tolevel);
@@ -339,6 +544,7 @@ static void removevars (FuncState *fs, int tolevel) {
 /*
 ** Search the upvalues of the function 'fs' for one
 ** with the given 'name'.
+** 搜索fs里一个名字为name的上值
 */
 static int searchupvalue (FuncState *fs, TString *name) {
   int i;
@@ -533,9 +739,16 @@ static void solvegoto (LexState *ls, int g, Labeldesc *label) {
   Labellist *gl = &ls->dyd->gt;  /* list of gotos */
   Labeldesc *gt = &gl->arr[g];  /* goto to be resolved */
   lua_assert(eqstr(gt->name, label->name));
+  
+  //标签定义处 和 goto 处的局部变量数要一样！！！
+  //label的活跃局部变量数 和 goto 位置处的局部变量数要一样
   if (l_unlikely(gt->nactvar < label->nactvar))  /* enter some scope? */
     jumpscopeerror(ls, gt);
+  
+  //gt处的跳转指令跳转到label处
   luaK_patchlist(ls->fs, gt->pc, label->pc);
+
+  //从待处理列表移除goto 标签
   for (i = g; i < gl->n - 1; i++)  /* remove goto from pending list */
     gl->arr[i] = gl->arr[i + 1];
   gl->n--;
@@ -568,7 +781,7 @@ static int newlabelentry (LexState *ls, Labellist *l, TString *name,
                   Labeldesc, SHRT_MAX, "labels/gotos");
   l->arr[n].name = name;
   l->arr[n].line = line;
-  l->arr[n].nactvar = ls->fs->nactvar;
+  l->arr[n].nactvar = ls->fs->nactvar;  //标签定义处的活跃变量数
   l->arr[n].close = 0;
   l->arr[n].pc = pc;
   l->n = n + 1;
@@ -588,7 +801,7 @@ static int newgotoentry (LexState *ls, TString *name, int line, int pc) {
 */
 static int solvegotos (LexState *ls, Labeldesc *lb) {
   Labellist *gl = &ls->dyd->gt;
-  int i = ls->fs->bl->firstgoto;
+  int i = ls->fs->bl->firstgoto; //这个block里第一个待处理的goto 下表
   int needsclose = 0;
   while (i < gl->n) {
     if (eqstr(gl->arr[i].name, lb->name)) {
@@ -607,17 +820,28 @@ static int solvegotos (LexState *ls, Labeldesc *lb) {
 ** 'last' tells whether label is the last non-op statement in its
 ** block. Solves all pending gotos to this new label and adds
 ** a close instruction if necessary.
-** Returns true iff it added a close instruction.
+** Returns true if it added a close instruction.
+** last的意思是表示这个标签是不是当前所在的block的最后一个语句
 */
 static int createlabel (LexState *ls, TString *name, int line,
                         int last) {
   FuncState *fs = ls->fs;
   Labellist *ll = &ls->dyd->label;
+  //注册新标签
   int l = newlabelentry(ls, ll, name, line, luaK_getlabel(fs));
   if (last) {  /* label is last no-op statement in the block? */
     /* assume that locals are already out of scope */
-    ll->arr[l].nactvar = fs->bl->nactvar;
+    ll->arr[l].nactvar = fs->bl->nactvar;//bl->nactvar这是进入当前块之前的活跃变量数量
+    // 为什么要这样做？
+    // 1.语义规则：不能从块外 goto 到块内的标签。
+    // 2.在块内部，局部变量是有效的。但在块结束时，这些局部变量会超出作用域。
+    // 3.如果一个标签位于块的最后一行，那么对于块外的代码来说，这个标签看起来就像是已经随着块一起结束了。
+    // 块外的 goto 试图跳转到这个标签时，实际上是在尝试跳入一个已经结束的块，这是非法的。
+    // 4.通过将标签的 nactvar 设置为进入块之前的值，模拟了这个标签“位于块外”的假象。
+    // 这样，当块外的 goto 尝试跳转到它时，solvegotos 中的检查逻辑 (nactvar != fs->nactvar) 会失败，
+    // 从而正确地报告“no visible label 'name' for <goto>”错误。
   }
+  //解决所有指向这个新标签的待处理 goto，并根据需要生成指令
   if (solvegotos(ls, &ll->arr[l])) {  /* need close? */
     luaK_codeABC(fs, OP_CLOSE, luaY_nvarstack(fs), 0, 0);
     return 1;
@@ -642,9 +866,8 @@ static void movegotosout (FuncState *fs, BlockCnt *bl) {
   }
 }
 
-
 static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isloop) {
-  bl->isloop = isloop;
+  bl->isloop = isloop;  //block是否处于循环体中
   bl->nactvar = fs->nactvar;
   bl->firstlabel = fs->ls->dyd->label.n;
   bl->firstgoto = fs->ls->dyd->gt.n;
@@ -653,6 +876,8 @@ static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isloop) {
   bl->previous = fs->bl;
   fs->bl = bl;
   lua_assert(fs->freereg == luaY_nvarstack(fs));
+  //fprintf(llex_file,"enterblock: bl->fistlabel: %d, bl->firstgoto: %d  bl->isloop %d bl->\n",bl->firstlabel, bl->firstgoto,bl->isloop);
+  fprintf(llex_file,"enterblock:%s \n",log_blockcnt(bl));
 }
 
 
@@ -672,21 +897,48 @@ static l_noret undefgoto (LexState *ls, Labeldesc *gt) {
   luaK_semerror(ls, msg);
 }
 
-
+//--离开block
 static void leaveblock (FuncState *fs) {
   BlockCnt *bl = fs->bl;
   LexState *ls = fs->ls;
   int hasclose = 0;
+  //计算离开这个块后，栈应该恢复到的寄存器层级。bl->nactvar 是进入块时的活跃变量数，
+  //reglevel 将其转换为对应的寄存器索引。这将是释放寄存器的基础。
   int stklevel = reglevel(fs, bl->nactvar);  /* level outside the block */
   removevars(fs, bl->nactvar);  /* remove block locals */
   lua_assert(bl->nactvar == fs->nactvar);  /* back to level on entry */
-  if (bl->isloop)  /* has to fix pending breaks? */
+  
+  if (bl->isloop)  /* has to fix pending breaks? 检查当前块是否是一个循环体*/
     hasclose = createlabel(ls, luaS_newliteral(ls->L, "break"), 0, 0);
+
+  //!hasclose: 如果上一步处理 break 时没有生成 OP_CLOSE。
+  //bl->previous: 当前块是一个嵌套块（不是最外层的函数块）。
+  //bl->upval: 这是一个重要标志，在进入块时被设置。它表示这个块内部有局部变量被内层块引用为 upvalue。
   if (!hasclose && bl->previous && bl->upval)  /* still need a 'close'? */
     luaK_codeABC(fs, OP_CLOSE, stklevel, 0, 0);
+  // 结论: 如果一个嵌套块内部创建了上值，但在退出时，之前的逻辑（处理break）还没有生成 OP_CLOSE 指令，
+  // 那么必须在这里生成一条。OP_CLOSE stklevel 的作用是关闭所有在寄存器层级 stklevel 之上的、已经超出作用域的上值。
+
+
   fs->freereg = stklevel;  /* free registers */
+  //bl->firstlabel 记录了进入块时标签列表的长度。
+  //将列表的 n 设置回这个值，就相当于移除了在本块内声明的所有标签，防止它们被块外的 goto 看到
   ls->dyd->label.n = bl->firstlabel;  /* remove local labels */
   fs->bl = bl->previous;  /* current block now is previous one */
+
+
+// 这是最后一步，也是确保 goto 语义正确性的关键。
+// 情况一：退出的是嵌套块 (if (bl->previous))
+// movegotosout(fs, bl): 调用这个函数。
+// 它遍历从 bl->firstgoto 开始到列表末尾的所有待处理的 goto。这些 goto 是在当前块内声明的，但其目标标签尚未找到。
+// 作用：将这些 goto 的 nactvar（记录它们所在位置的活跃变量数）更新为离开当前块后的值（即 fs->nactvar）。
+// 这样，当这些 goto 在外层块被解决时，它们会与正确的作用域信息进行比较。
+
+// 情况二：退出的是最外层块（函数块）(else)
+// if (bl->firstgoto < ls->dyd->gt.n): 检查在进入这个最外层块时，是否还有未被解决的 goto 语句（firstgoto 是进入时的列表长度，
+// 如果它小于当前列表长度 n，说明有未解决的）。
+// undefgoto(ls, ...): 如果还有未解决的 goto，这是一个编译错误。
+// undefgoto 会报告错误：“no visible label 'X' for <goto>”，因为goto要跳转的标签在函数范围内根本不存在。
   if (bl->previous)  /* was it a nested block? */
     movegotosout(fs, bl);  /* update pending gotos to enclosing block */
   else {
@@ -747,8 +999,8 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
   fs->ndebugvars = 0;
   fs->nactvar = 0;
   fs->needclose = 0;
-  fs->firstlocal = ls->dyd->actvar.n;
-  fs->firstlabel = ls->dyd->label.n;
+  fs->firstlocal = ls->dyd->actvar.n; //是下标
+  fs->firstlabel = ls->dyd->label.n;  //是下标
   fs->bl = NULL;
   f->source = ls->source;
   luaC_objbarrier(ls->L, f, f->source);
@@ -929,6 +1181,7 @@ static void field (LexState *ls, ConsControl *cc) {
 static void constructor (LexState *ls, expdesc *t) {
   /* constructor -> '{' [ field { sep field } [sep] ] '}'
      sep -> ',' | ';' */
+  fprintf(llex_file,"constructor: expkind:%s\n",expkind_to_string(t->k));
   FuncState *fs = ls->fs;
   int line = ls->linenumber;
   int pc = luaK_codeABC(fs, OP_NEWTABLE, 0, 0, 0);
@@ -993,6 +1246,7 @@ static void parlist (LexState *ls) {
 
 static void body (LexState *ls, expdesc *e, int ismethod, int line) {
   /* body ->  '(' parlist ')' block END */
+  fprintf(llex_file,"function body, ismethod:%d, line:%d \n",ismethod, line);
   FuncState new_fs;
   BlockCnt bl;
   new_fs.f = addprototype(ls);
@@ -1461,10 +1715,14 @@ static void checkrepeated (LexState *ls, TString *name) {
 
 static void labelstat (LexState *ls, TString *name, int line) {
   /* label -> '::' NAME '::' */
-  checknext(ls, TK_DBCOLON);  /* skip double colon */
+  checknext(ls, TK_DBCOLON);  /* skip double colon 跳过第2个:: */
+  // Lua 语法允许在标签后出现多个连续的“无操作”语句（空语句或另一个标签）。
+  // 这个循环会跳过所有这些无意义的语句，直到遇到一个有实际内容的 token。这确保了解析器处于正确的位置来处理接下来的有效代码
   while (ls->t.token == ';' || ls->t.token == TK_DBCOLON)
-    statement(ls);  /* skip other no-op statements */
+    statement(ls);  /* skip other no-op statements 这允许在标签后出现另一个标签（例如 ::a::::b::），这在语法上是允许但无实际作用的。*/
+  //检测之前是否存在该同名标签
   checkrepeated(ls, name);  /* check for repeated labels */
+  //创建标签
   createlabel(ls, name, line, block_follow(ls, 0));
 }
 
@@ -1644,7 +1902,7 @@ static void test_then_block (LexState *ls, int *escapelist) {
   BlockCnt bl;
   FuncState *fs = ls->fs;
   expdesc v;
-  int jf;  /* instruction to skip 'then' code (if condition is false) */
+  int jf;  /* instruction to skip 'then' code (if condition is false) 也就是说跳到下一个block的第一条指令*/
   luaX_next(ls);          /*跳过if或者ifelse*/
   expr(ls, &v);           /* 解析 cond表达式  a < b =>op_test op_jmp*/
   checknext(ls, TK_THEN); /*跳过then*/
@@ -1742,6 +2000,7 @@ static void checktoclose (FuncState *fs, int level) {
 }
 
 static void localstat (LexState *ls) {
+ // ShowParselog("enter localstat");
   /* stat -> LOCAL NAME ATTRIB { ',' NAME ATTRIB } ['=' explist] */
   FuncState *fs = ls->fs;
   int toclose = -1;  /* 待关闭变量的索引（如果有的话） */
@@ -1959,6 +2218,7 @@ static void mainfunc (LexState *ls, FuncState *fs) {
 
 LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
                        Dyndata *dyd, const char *name, int firstchar) {
+  ShowParselog("start parser------------------------>");
   LexState lexstate;
   FuncState funcstate;
   LClosure *cl = luaF_newLclosure(L, 1);  /* create main closure */

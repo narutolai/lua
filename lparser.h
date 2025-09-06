@@ -60,17 +60,25 @@ typedef struct expdesc {
     lua_Number nval;  /* for VKFLT */
     TString *strval;  /* for VKSTR */
     int info;  /* for generic use */
-    struct {  /* for indexed variables */
-      short idx;  /* index (R or "long" K) */
-      lu_byte t;  /* table (register or upvalue) */
+    struct {  /* for indexed variables 索引变量*/
+      short idx;  /* index (R or "long" K) 索引位置 */
+      lu_byte t;  /* table (register or upvalue) 表的位置 */
     } ind;
     struct {  /* for local variables */
+      // 两级索引系统
+      // vidx: 变量在符号表中的逻辑索引（稳定）
+      // ridx: 变量在寄存器中的物理位置（可能变化）
       lu_byte ridx;  /* register holding the variable */
       unsigned short vidx;  /* compiler index (in 'actvar.arr')  */
     } var;
   } u;
+  //为真时退出"的跳转列表。它保存了一个指令指针（pc）的链表。当这个表达式的结果为真时，需要跳转到哪里去执行
   int t;  /* patch list of 'exit when true' */
+  //"为假时退出"的跳转列表。它保存了一个指令指针（pc）的链表。当这个表达式的结果为假时，需要跳转到哪里去执行。
   int f;  /* patch list of 'exit when false' */
+  //编译器在生成条件判断指令时，可能还不知道最终要跳转的目标地址。
+  //它会先生成一个跳转指令，但把目标地址先设为“待修补”（通常设为 NO_JUMP 或 -1），
+  //并将这条指令的地址记录在 t 或 f 列表中。等后续知道了真正的目标地址后，再回来“修补”（patch）这些指令中的跳转偏移量。
 } expdesc;
 
 
@@ -94,13 +102,16 @@ typedef union Vardesc {
 
 
 
-/* description of pending goto statements and label statements */
+/* description of pending(待处理的) goto statements and label statements */
 typedef struct Labeldesc {
   TString *name;  /* label identifier */
   int pc;  /* position in code */
   int line;  /* line where it appeared */
+  // 记录标签定义点或 goto 语句点的局部变量数量
+  // 用于验证 goto 是否跨越了不同的变量作用域
+  // 防止非法跳转（如跳入变量作用域内部）
   lu_byte nactvar;  /* number of active variables in that position */
-  lu_byte close;  /* goto that escapes upvalues */
+  lu_byte close;  /* goto that escapes upvalues 标记 goto 是否跳出了包含上值的作用域*/
 } Labeldesc;
 
 
@@ -116,11 +127,11 @@ typedef struct Labellist {
 typedef struct Dyndata {
   struct {  /* list of all active local variables */
     Vardesc *arr;
-    int n;
-    int size;
+    int n;    //元素个数
+    int size; //arr的size
   } actvar;
-  Labellist gt;  /* list of pending gotos */
-  Labellist label;   /* list of active labels */
+  Labellist gt;  /* list of pending gotos 遇见goto xxxx时存入gt*/
+  Labellist label;   /* list of active labels 遇见 ::xxxx:: 时存入label 并解析gt中的对应项目*/
 } Dyndata;
 
 

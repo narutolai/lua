@@ -29,8 +29,12 @@
 #include "lstring.h"
 #include "ltable.h"
 #include "lvm.h"
+#include <stdio.h>
 
-
+extern FILE *llex_file;
+//语法分析
+const char* expkind_to_string(expkind kind);
+extern char* log_expdesc(const expdesc *exp);
 /* Maximum number of registers in a Lua function (must fit in 8 bits) */
 #define MAXREGS		255
 
@@ -52,6 +56,7 @@ l_noret luaK_semerror (LexState *ls, const char *msg) {
 /*
 ** If expression is a numeric constant, fills 'v' with its value
 ** and returns 1. Otherwise, returns 0.
+** 如果表达式是个数字常量
 */
 static int tonumeral (const expdesc *e, TValue *v) {
   if (hasjumps(e))
@@ -128,6 +133,7 @@ static Instruction *previousinstruction (FuncState *fs) {
 ** range of previous instruction instead of emitting a new one. (For
 ** instance, 'local a; local b' will generate a single opcode.)
 */
+//从R[from]开始的n个元素都设置为nil,如果前一个指令也是OP_LOADNIL,则会尝试修改前一条指令
 void luaK_nil (FuncState *fs, int from, int n) {
   int l = from + n - 1;  /* last register to set nil */
   Instruction *previous = previousinstruction(fs);
@@ -400,7 +406,10 @@ static void removelastinstruction (FuncState *fs) {
 ** Emit instruction 'i', checking for array sizes and saving also its
 ** line information. Return 'i' position.
 */
-int luaK_code (FuncState *fs, Instruction i) {
+extern char* get_opcode_name(OpCode op);
+int luaK_code (FuncState *fs, Instruction i) { 
+  OpCode o=GET_OPCODE(i);
+  //fprintf(llex_file,"luaK_code gen a new code: %s\n",get_opcode_name(o));
   Proto *f = fs->f;
   /* put new instruction in code array */
   luaM_growvector(fs->ls->L, f->code, fs->pc, f->sizecode, Instruction,
@@ -789,8 +798,10 @@ void luaK_setoneret (FuncState *fs, expdesc *e) {
 /*
 ** Ensure that expression 'e' is not a variable (nor a <const>).
 ** (Expression still may have jump lists.)
+** 确保表达式不是一个变量,这里是可能会有指令生成的
 */
 void luaK_dischargevars (FuncState *fs, expdesc *e) {
+  fprintf(llex_file,"before luaK_dischargevars expdesc: %s\n", log_expdesc(e));
   switch (e->k) {
     case VCONST: {
       const2exp(const2val(fs, e), e);//根据常量的值类型来确定表达式e的类型
@@ -799,11 +810,14 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
     case VLOCAL: {  /* already in a register */
       e->u.info = e->u.var.ridx;
       e->k = VNONRELOC;  /* becomes a non-relocatable value */
+      //不需要重定位 已经在寄存器中
       break;
     }
     case VUPVAL: {  /* move value to some (pending) register */
       e->u.info = luaK_codeABC(fs, OP_GETUPVAL, 0, e->u.info, 0);
       e->k = VRELOC;
+      //表达式需要重定位，重定位啥??指令的A域,就是这个指令的值还不知道放哪个寄存器那。
+      //此时 u->u.info 指向需要修正的pc
       break;
     }
     case VINDEXUP: {
@@ -835,12 +849,15 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
     }
     default: break;  /* there is one value available (somewhere) */
   }
+  fprintf(llex_file,"after luaK_dischargevars expdesc: %s\n", log_expdesc(e));
 }
 /*
 **  Ensure expression value is in register 'reg', making 'e' a non-relocatable expression.
 ** (Expression still may have jump lists.)
+** 确保表达式的值在寄存器里 让e变成一个不需要重定位的表达式(当然依旧可以有跳转指令)
 */
 static void discharge2reg (FuncState *fs, expdesc *e, int reg) {
+  fprintf(llex_file,"before discharge2reg expdesc: %s\n", log_expdesc(e));
   luaK_dischargevars(fs, e);                //把e->k转属于下面的case之一
   switch (e->k) {
     case VNIL: {
@@ -885,8 +902,9 @@ static void discharge2reg (FuncState *fs, expdesc *e, int reg) {
       return;  /* nothing to do... */
     }
   }
-  e->u.info = reg;
-  e->k = VNONRELOC;
+  e->u.info = reg;        //e->u.info 是表达式的值存放的寄存器位置
+  e->k = VNONRELOC;       //最终不需要重定位
+  fprintf(llex_file,"after discharge2reg expdesc: %s\n", log_expdesc(e));
 }
 
 
@@ -929,6 +947,7 @@ static int need_value (FuncState *fs, int list) {
 ** If expression has jumps, need to patch these jumps either to
 ** its final position or to "load" instructions (for those tests
 ** that do not produce values).
+** 确保表达式e的值在reg里,如果表达式有跳转
 */
 static void exp2reg (FuncState *fs, expdesc *e, int reg) {
   discharge2reg(fs, e, reg);
@@ -1063,6 +1082,9 @@ static void codeABRK (FuncState *fs, OpCode o, int a, int b,
 
 /*
 ** Generate code to store result of expression 'ex' into variable 'var'.
+** 产生代码 把表达式ex的结果存到 var 里 var  <--- ex
+** 比如 local a = {}, a[1] = 1
+** 好像之前没看过这个函数
 */
 void luaK_storevar (FuncState *fs, expdesc *var, expdesc *ex) {
   switch (var->k) {
@@ -1152,7 +1174,7 @@ static int jumponcond (FuncState *fs, expdesc *e, int cond) {
 
 /*
 ** Emit code to go through if 'e' is true, jump otherwise.
-** "如果 'e' 为真，则执行代码；否则跳转。
+** "如果 'e' 为真，则执行代码；否则e是false 就要跳转,跳转就要用pc记录下跳转的指令地址。
 */
 void luaK_goiftrue (FuncState *fs, expdesc *e) {
   int pc;  /* 新的跳转指令索引 */
@@ -1167,15 +1189,19 @@ void luaK_goiftrue (FuncState *fs, expdesc *e) {
     }
     case VK: case VKFLT: case VKINT: case VKSTR: case VTRUE: {
       pc = NO_JUMP;  /* always true; do nothing */
-      break;          //这种情况不会生成jmp指令
+      break;          //这种情况不会生成jmp指令 因为e永远是true
     }
     default: {
+      //这种情况需要得出表达式e的值，然后看是否是0 ，是0就是false哈 是false，那么就要生成false pc跳转指令
       pc = jumponcond(fs, e, 0);  /* if false 这里会生成jmp指令 如果e是false*/
       break;
     }
   }
-  //把新的跳转指令插入false 列表
+  //e->f 和 e->t是链表表头哈
+  //把新的跳转指令插入false 列表 pc是e为false的时候指令的跳转地址
+  //注意她的插入方式很神奇
   luaK_concat(fs, &e->f, pc);  /* insert new jump in false list */
+  //e->t链表里的指令的跳转地址都修正为当前pc
   luaK_patchtohere(fs, e->t);  /* true list jumps to here (to go through) */
   e->t = NO_JUMP;
 }
