@@ -83,6 +83,7 @@ static UpVal *newupval (lua_State *L, StkId level, UpVal **prev) {
 /*
 ** Find and reuse, or create if it does not exist, an upvalue
 ** at the given level.
+** level就是栈地址啊,
 */
 UpVal *luaF_findupval (lua_State *L, StkId level) {
   UpVal **pp = &L->openupval;
@@ -90,7 +91,7 @@ UpVal *luaF_findupval (lua_State *L, StkId level) {
   lua_assert(isintwups(L) || L->openupval == NULL);
   while ((p = *pp) != NULL && uplevel(p) >= level) {  /* search for it */
     lua_assert(!isdead(G(L), p));
-    if (uplevel(p) == level)  /* corresponding upvalue? */
+    if (uplevel(p) == level)  /* corresponding upvalue? 地址相同 */
       return p;  /* return it */
     pp = &p->u.open.next;
   }
@@ -231,6 +232,7 @@ static void poptbclist (lua_State *L) {
 /*
 ** Close all upvalues and to-be-closed variables up to the given stack
 ** level. Return restored 'level'.
+** 关闭上值
 */
 StkId luaF_close (lua_State *L, StkId level, int status, int yy) {
   ptrdiff_t levelrel = savestack(L, level);

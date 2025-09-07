@@ -628,18 +628,20 @@ typedef struct Proto {
 /*
 ** Upvalues for Lua closures
 ** 上值是一个函数引用了外部的变量，当该外部变量已关闭，
+** 云风的lua源码解析中说，lua的upvalue是表示对另一个lua值的引用!!好比c语言中的指针
 */
 typedef struct UpVal {
   CommonHeader;
   union {
     TValue *p;  /* points to stack or to its own value */
     ptrdiff_t offset;  /* used while the stack is being reallocated */
-  } v;
+  } v;      //如果引用时值还在栈上，指针直接指向栈上地址 表示开放的上值
   union {
     struct {  /* (when open) */
       struct UpVal *next;  /* linked list */
       struct UpVal **previous;
     } open;
+    //上值关闭时，就不在栈上了
     TValue value;  /* the value (when closed) */
   } u;
 } UpVal;
@@ -649,6 +651,8 @@ typedef struct UpVal {
 #define ClosureHeader \
 	CommonHeader; lu_byte nupvalues; GCObject *gclist
 
+  //c闭包的上值不会去引用外层函数中的局部变量，所以c闭包中的upval天生就是关闭状态 不需要独立的Upval对象来引用
+  //upvalue是直接存在CClosure结构中，所以直接TValue！！
 typedef struct CClosure {
   ClosureHeader;
   lua_CFunction f;

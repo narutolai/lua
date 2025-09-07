@@ -28,7 +28,7 @@
 #include "ltable.h"
 #include "lzio.h"
 #include <stdio.h>
-extern  *llex_file = NULL;
+extern  FILE*llex_file;
 const char* reserved_to_string(int token) {
     switch (token) {
         case TK_AND: return "TK_AND";

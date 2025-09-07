@@ -85,14 +85,14 @@ typedef struct expdesc {
 /* kinds of variables */
 #define VDKREG		0   /* regular */
 #define RDKCONST	1   /* constant */
-#define RDKTOCLOSE	2   /* to-be-closed */
-#define RDKCTC		3   /* compile-time constant */
+#define RDKTOCLOSE	2   /* to-be-closed local res <close> = xxxx*/
+#define RDKCTC		3   /* compile-time constant */ 
 
-/* description of an active local variable */
+/* description of an active local variable  一个活跃的局部变量*/
 typedef union Vardesc {
   struct {
     TValuefields;  /* constant value (if it is a compile-time constant) */
-    lu_byte kind;
+    lu_byte kind;   //变量类型
     lu_byte ridx;  /* register holding the variable */
     short pidx;  /* index of the variable in the Proto's 'locvars' array */
     TString *name;  /* variable name */

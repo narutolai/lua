@@ -801,7 +801,7 @@ void luaK_setoneret (FuncState *fs, expdesc *e) {
 ** 确保表达式不是一个变量,这里是可能会有指令生成的
 */
 void luaK_dischargevars (FuncState *fs, expdesc *e) {
-  fprintf(llex_file,"before luaK_dischargevars expdesc: %s\n", log_expdesc(e));
+  //fprintf(llex_file,"before luaK_dischargevars expdesc: %s\n", log_expdesc(e));
   switch (e->k) {
     case VCONST: {
       const2exp(const2val(fs, e), e);//根据常量的值类型来确定表达式e的类型
@@ -849,7 +849,7 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
     }
     default: break;  /* there is one value available (somewhere) */
   }
-  fprintf(llex_file,"after luaK_dischargevars expdesc: %s\n", log_expdesc(e));
+  //fprintf(llex_file,"after luaK_dischargevars expdesc: %s\n", log_expdesc(e));
 }
 /*
 **  Ensure expression value is in register 'reg', making 'e' a non-relocatable expression.
@@ -857,7 +857,7 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
 ** 确保表达式的值在寄存器里 让e变成一个不需要重定位的表达式(当然依旧可以有跳转指令)
 */
 static void discharge2reg (FuncState *fs, expdesc *e, int reg) {
-  fprintf(llex_file,"before discharge2reg expdesc: %s\n", log_expdesc(e));
+  //fprintf(llex_file,"before discharge2reg expdesc: %s\n", log_expdesc(e));
   luaK_dischargevars(fs, e);                //把e->k转属于下面的case之一
   switch (e->k) {
     case VNIL: {
@@ -904,7 +904,7 @@ static void discharge2reg (FuncState *fs, expdesc *e, int reg) {
   }
   e->u.info = reg;        //e->u.info 是表达式的值存放的寄存器位置
   e->k = VNONRELOC;       //最终不需要重定位
-  fprintf(llex_file,"after discharge2reg expdesc: %s\n", log_expdesc(e));
+  //fprintf(llex_file,"after discharge2reg expdesc: %s\n", log_expdesc(e));
 }
 
 
@@ -1341,7 +1341,7 @@ void luaK_indexed (FuncState *fs, expdesc *t, expdesc *k) {
     t->k = VINDEXUP;
   }
   else {
-    /* register index of the table */
+    /* register index of the table 表的栈索引*/
     t->u.ind.t = (t->k == VLOCAL) ? t->u.var.ridx: t->u.info;
     if (isKstr(fs, k)) {
       t->u.ind.idx = k->u.info;  /* literal string */

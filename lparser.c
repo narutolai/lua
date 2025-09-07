@@ -28,7 +28,7 @@
 #include "lstring.h"
 #include "ltable.h"
 #include <stdio.h>
-FILE *llex_file;
+FILE *llex_file = NULL;
 //语法分析
 
 void ShowParselog(const char* logstr)
@@ -388,10 +388,11 @@ static int registerlocalvar (LexState *ls, FuncState *fs, TString *varname) {
 /*
 ** Create a new local variable with the given 'name'. Return its index
 ** in the function.
-** 给定name 创建一个新的局部变量,返回变量在函数里的index
+** 给定name 创建一个新的局部变量Vardesc,返回变量在函数里的index
+** 每出现一个local 就会有这个函数调用
 */
 static int new_localvar (LexState *ls, TString *name) {
-  //fprintf(llex_file,"create a new localval: %s in Dyndata\n",name->contents);
+  fprintf(llex_file,"create a new localval: %s in Dyndata\n",name->contents);
   lua_State *L = ls->L;
   FuncState *fs = ls->fs;
   Dyndata *dyd = ls->dyd;
@@ -401,6 +402,7 @@ static int new_localvar (LexState *ls, TString *name) {
   luaM_growvector(L, dyd->actvar.arr, dyd->actvar.n + 1,
                   dyd->actvar.size, Vardesc, USHRT_MAX, "local variables");
   var = &dyd->actvar.arr[dyd->actvar.n++];
+  //设置vardesc的 kind 和 name
   var->vd.kind = VDKREG;  /* default */
   var->vd.name = name;
   return dyd->actvar.n - 1 - fs->firstlocal;
@@ -426,6 +428,8 @@ static Vardesc *getlocalvardesc (FuncState *fs, int vidx) {
 ** Convert 'nvar', a compiler index level, to its corresponding
 ** register. For that, search for the highest variable below that level
 ** that is in a register and uses its register index ('ridx') plus one.
+** nvar是当前函数里局部变量的个数吧，找到第一个在栈上的局部变量,因为有的变量可能不在栈上的，
+** 然后返回其栈寄存器 +1,那返回的是第一个可用的寄存器
 */
 static int reglevel (FuncState *fs, int nvar) {
   while (nvar-- > 0) {
@@ -433,13 +437,14 @@ static int reglevel (FuncState *fs, int nvar) {
     if (vd->vd.kind != RDKCTC)  /* is in a register? */
       return vd->vd.ridx + 1;
   }
-  return 0;  /* no variables in registers */
+  return 0;  /* no variables in registers  这个函数在栈上没有变量*/
 }
 
 
 /*
 ** Return the number of variables in the register stack for the given
 ** function.
+** 返回给定函数在栈上的变量个数，为什么不直接返回fs->nactvar呢，因为有的变量它有可能不在栈上
 */
 int luaY_nvarstack (FuncState *fs) {
   return reglevel(fs, fs->nactvar);
@@ -494,7 +499,7 @@ static void check_readonly (LexState *ls, expdesc *e) {
     }
     case VUPVAL: {
       Upvaldesc *up = &fs->f->upvalues[e->u.info];
-      if (up->kind != VDKREG)
+      if (up->kind != VDKREG) /*not a regular variable 不是一个正常的变量*/
         varname = up->name;
       break;
     }
@@ -511,16 +516,21 @@ static void check_readonly (LexState *ls, expdesc *e) {
 
 /*
 ** Start the scope for the last 'nvars' created variables.
+** 为最新创建的 'nvars' 个变量建立作用域
 */
 static void adjustlocalvars (LexState *ls, int nvars) {
   FuncState *fs = ls->fs;                    // 获取当前函数的编译状态
-  int reglevel = luaY_nvarstack(fs);         // 获取当前栈层级
+  int reglevel = luaY_nvarstack(fs);         // 获取当前栈层级/下一个可用的寄存器索引
   int i;
   for (i = 0; i < nvars; i++) {              // 为每个新变量处理
     int vidx = fs->nactvar++;                // 激活变量计数增加
     Vardesc *var = getlocalvardesc(fs, vidx); // 获取变量描述符
+    //设置变量的寄存器索引和proto索引
+    //要注意哈 这个ridx是表示变量在当前函数栈帧内，是栈帧上的第几个变量
+    //换句话说每进入一个新的函数，这个ridx或者reglevel都是从0开始的
     var->vd.ridx = reglevel++;               // 分配寄存器索引
     var->vd.pidx = registerlocalvar(ls, fs, var->vd.name); // 注册局部变量
+    fprintf(llex_file,"adjustlocalvars var->vd.ridx:%d, name:%s \n",  var->vd.ridx,var->vd.name->contents);
   }
 }
 
@@ -572,14 +582,14 @@ static int newupvalue (FuncState *fs, TString *name, expdesc *v) {
   Upvaldesc *up = allocupvalue(fs);
   FuncState *prev = fs->prev;
   if (v->k == VLOCAL) {
-    up->instack = 1;
-    up->idx = v->u.var.ridx;
+    up->instack = 1;          //上值在外层函数的栈上
+    up->idx = v->u.var.ridx;  //栈上第几个变量
     up->kind = getlocalvardesc(prev, v->u.var.vidx)->vd.kind;
     lua_assert(eqstr(name, getlocalvardesc(prev, v->u.var.vidx)->vd.name));
   }
-  else {
-    up->instack = 0;
-    up->idx = cast_byte(v->u.info);
+  else {                
+    up->instack = 0;                //上值在外层函数的上值列表里
+    up->idx = cast_byte(v->u.info); //上值列表第几个
     up->kind = prev->f->upvalues[v->u.info].kind;
     lua_assert(eqstr(name, prev->f->upvalues[v->u.info].name));
   }
@@ -593,6 +603,7 @@ static int newupvalue (FuncState *fs, TString *name, expdesc *v) {
 ** Look for an active local variable with the name 'n' in the
 ** function 'fs'. If found, initialize 'var' with it and return
 ** its expression kind; otherwise return -1.
+** 查找当前函数的所有活跃局部变量
 */
 static int searchvar (FuncState *fs, TString *n, expdesc *var) {
   int i;
@@ -613,11 +624,14 @@ static int searchvar (FuncState *fs, TString *n, expdesc *var) {
 /*
 ** Mark block where variable at given level was defined
 ** (to emit close instructions later).
+** 标记定义了那个变量的block ，level指示这个变量是在函数栈帧里的第几个变量
 */
 static void markupval (FuncState *fs, int level) {
   BlockCnt *bl = fs->bl;
-  while (bl->nactvar > level)
+  while (bl->nactvar > level) //bl->nactvar 就是fs->nactvar
     bl = bl->previous;
+  //一个FuncState里有很多个BlockCnt
+  //退出时 bl->nactvar <= level 
   bl->upval = 1;        // 标记该作用域块有变量被捕获为 Upvalue
   fs->needclose = 1;    // 通知编译器后续需要生成 OP_CLOSE 指令
 }
@@ -625,12 +639,18 @@ static void markupval (FuncState *fs, int level) {
 
 /*
 ** Mark that current block has a to-be-closed variable.
+** 这个to-be-closed 是啥玩意儿
+**（待关闭变量）是一种特殊的局部变量，当变量超出作用域时，会自动调用其 __close元方法
+** 定义的时候如下 local a <close> = xxxx 
+** local a <close> = setmetatable({},{__close=function() print("close called") end})
+** 这是 Lua 5.4 引入的特性，主要用于资源管理和自动清理
+** 是不是加快gc啊 模拟函数栈结束后，栈上的局部变量立即销毁
 */
 static void marktobeclosed (FuncState *fs) {
   BlockCnt *bl = fs->bl;
-  bl->upval = 1;
-  bl->insidetbc = 1;
-  fs->needclose = 1;
+  bl->upval = 1;        // 标记该块使用上值（upvalue）
+  bl->insidetbc = 1;    // 标记该块包含 to-be-closed 变量
+  fs->needclose = 1;    // 标记函数需要关闭处理
 }
 
 
@@ -643,15 +663,21 @@ static void singlevaraux (FuncState *fs, TString *n, expdesc *var, int base) {
   if (fs == NULL)  /* no more levels? */
     init_exp(var, VVOID, 0);  /* default is global */
   else {
-    int v = searchvar(fs, n, var);  /* look up locals at current level */
+    //先找当前函数的局部变量在 Dyndata中找
+    int v = searchvar(fs, n, var);  /* look up locals at current level 返回变量类型*/
     if (v >= 0) {  /* found? */
-      if (v == VLOCAL && !base)
+      if (v == VLOCAL && !base) //只有base为0才会这样 也即是not found的时候
         markupval(fs, var->u.var.vidx);  /* local will be used as an upval */
     }
     else {  /* not found as local at current level; try upvalues */
+      //找不到就找当前函数的上值 在fs->Upvaldesc里找
       int idx = searchupvalue(fs, n);  /* try existing upvalues */
       if (idx < 0) {  /* not found? */
+        //还找不到就去前一个函数那找(也是先找局部，然后找上值)
         singlevaraux(fs->prev, n, var, 0);  /* try upper levels */
+        //如果是local或者上值，则初始化为本层函数的上值
+        //注意这种处理方式，假如 fs1-->fs2-->fs3--->fs4 
+        //假如fs4引用了fs1的一个局部变量,那么这个局部变量会在fs2,fs3,fs4的上值里
         if (var->k == VLOCAL || var->k == VUPVAL)  /* local or upvalue? */
           idx  = newupvalue(fs, n, var);  /* will be a new upvalue */
         else  /* it is a global or a constant */
@@ -673,6 +699,7 @@ static void singlevar (LexState *ls, expdesc *var) {
   singlevaraux(fs, varname, var, 1);
   if (var->k == VVOID) {  /* global name? */
     expdesc key;
+    // 只能把 varname 当作是全局表的一个key了
     singlevaraux(fs, ls->envn, var, 1);  /* get environment variable */
     lua_assert(var->k != VVOID);  /* this one must exist */
     luaK_exp2anyregup(fs, var);  /* but could be a constant */
@@ -700,7 +727,7 @@ static void adjust_assign (LexState *ls, int nvars, int nexps, expdesc *e) {
     if (e->k != VVOID)  /* at least one expression? */
       luaK_exp2nextreg(fs, e);  /* close last expression 关闭最后一个表达式*/
 
-    if (needed > 0)  /* missing values? */
+    if (needed > 0)  /* missing values? nvars > nexps */
       luaK_nil(fs, fs->freereg, needed);  /* 使用nil填充变量值 */
   }
 
@@ -997,7 +1024,7 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
   fs->np = 0;
   fs->nups = 0;
   fs->ndebugvars = 0;
-  fs->nactvar = 0;
+  fs->nactvar = 0;    //open_func的时候是0啊
   fs->needclose = 0;
   fs->firstlocal = ls->dyd->actvar.n; //是下标
   fs->firstlabel = ls->dyd->label.n;  //是下标
@@ -1063,7 +1090,7 @@ static void statlist (LexState *ls) {
   }
 }
 
-
+//字段选择
 static void fieldsel (LexState *ls, expdesc *v) {
   /* fieldsel -> ['.' | ':'] NAME */
   FuncState *fs = ls->fs;
@@ -1206,23 +1233,26 @@ static void constructor (LexState *ls, expdesc *t) {
 
 /* }====================================================================== */
 
-
+//设置可变参数生成可变参数指令
 static void setvararg (FuncState *fs, int nparams) {
   fs->f->is_vararg = 1;
   luaK_codeABC(fs, OP_VARARGPREP, nparams, 0, 0);
 }
 
 
+//函数定义时，解析函数参数 parameter list
+// ... 必须是最后一个参数
 static void parlist (LexState *ls) {
   /* parlist -> [ {NAME ','} (NAME | '...') ] */
   FuncState *fs = ls->fs;
   Proto *f = fs->f;
   int nparams = 0;
   int isvararg = 0;
-  if (ls->t.token != ')') {  /* is 'parlist' not empty? */
+  if (ls->t.token != ')') {  /* is 'parlist' not empty?  参数表非空*/
     do {
       switch (ls->t.token) {
         case TK_NAME: {
+          //在Dyndata中注册Vardesc
           new_localvar(ls, str_checkname(ls));
           nparams++;
           break;
@@ -1238,7 +1268,7 @@ static void parlist (LexState *ls) {
   }
   adjustlocalvars(ls, nparams);
   f->numparams = cast_byte(fs->nactvar);
-  if (isvararg)
+  if (isvararg)//可变参数
     setvararg(fs, f->numparams);  /* declared vararg */
   luaK_reserveregs(fs, fs->nactvar);  /* reserve registers for parameters */
 }
@@ -1250,16 +1280,16 @@ static void body (LexState *ls, expdesc *e, int ismethod, int line) {
   FuncState new_fs;
   BlockCnt bl;
   new_fs.f = addprototype(ls);
-  new_fs.f->linedefined = line;
+  new_fs.f->linedefined = line; //函数定义处
   open_func(ls, &new_fs, &bl);
-  checknext(ls, '(');
-  if (ismethod) {
+  checknext(ls, '(');           //检测左括号
+  if (ismethod) {             //如果是表的方法 函数参数表的第一个位置添加了参数self 
     new_localvarliteral(ls, "self");  /* create 'self' parameter */
     adjustlocalvars(ls, 1);
   }
-  parlist(ls);
+  parlist(ls);              //然后再解析其他参数
   checknext(ls, ')');
-  statlist(ls);
+  statlist(ls);             //解析函数体
   new_fs.f->lastlinedefined = ls->linenumber;
   check_match(ls, TK_END, TK_FUNCTION, line);
   codeclosure(ls, e); //生成一个closure的指令
@@ -1280,6 +1310,7 @@ static int explist (LexState *ls, expdesc *v) {
 }
 
 
+//函数调用时,解析函数参数
 static void funcargs (LexState *ls, expdesc *f, int line) {
   FuncState *fs = ls->fs;
   expdesc args;
@@ -1629,11 +1660,15 @@ static void check_conflict (LexState *ls, struct LHS_assign *lh, expdesc *v) {
 **
 ** assignment -> suffixedexp restassign
 ** restassign -> ',' suffixedexp restassign | '=' explist
+
+** 这里是个递归
+** a,b,c = 1,2,3
 */
 static void restassign (LexState *ls, struct LHS_assign *lh, int nvars) {
   expdesc e;
   check_condition(ls, vkisvar(lh->v.k), "syntax error");
   check_readonly(ls, &lh->v);
+  //第一个已经被读取了,如果下一个是
   if (testnext(ls, ',')) {  /* restassign -> ',' suffixedexp restassign */
     struct LHS_assign nv;
     nv.prev = lh;
@@ -1648,9 +1683,10 @@ static void restassign (LexState *ls, struct LHS_assign *lh, int nvars) {
     int nexps;
     checknext(ls, '=');
     nexps = explist(ls, &e);
-    if (nexps != nvars)
+    if (nexps != nvars) //变量的数量不等于表达式的数量
       adjust_assign(ls, nvars, nexps, &e);
     else {
+      //变量数和表达式数量相同
       luaK_setoneret(ls->fs, &e);  /* close last expression */
       luaK_storevar(ls->fs, &lh->v, &e);
       return;  /* avoid default */
@@ -1962,12 +1998,12 @@ static void ifstat (LexState *ls, int line) {
   luaK_patchtohere(fs, escapelist);  /* patch escape list to 'if' end */
 }
 
-
+//一个local function的语句
 static void localfunc (LexState *ls) {
   expdesc b;
   FuncState *fs = ls->fs;
   int fvar = fs->nactvar;  /* function's variable index */
-  new_localvar(ls, str_checkname(ls));  /* new local variable */
+  new_localvar(ls, str_checkname(ls));  /* new local variable 这个就是这个函数*/
   adjustlocalvars(ls, 1);  /* enter its scope */
   body(ls, &b, 0, ls->linenumber);  /* function created in next register */
   /* debug information will only see the variable after this point! */
@@ -2068,7 +2104,7 @@ static void funcstat (LexState *ls, int line) {
   luaK_fixline(ls->fs, line);  /* definition "happens" in the first line */
 }
 
-
+// a,a[b],a.c = 1,2,3
 static void exprstat (LexState *ls) {
   /* stat -> func | assignment */
   FuncState *fs = ls->fs;
@@ -2086,7 +2122,7 @@ static void exprstat (LexState *ls) {
   }
 }
 
-
+//return 语句
 static void retstat (LexState *ls) {
   /* stat -> RETURN [explist] [';'] */
   FuncState *fs = ls->fs;

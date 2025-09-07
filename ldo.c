@@ -40,7 +40,7 @@
 
 /*
 ** {======================================================
-** Error-recovery functions
+** Error-recovery functions 错误恢复函数
 ** =======================================================
 */
 
@@ -119,7 +119,7 @@ l_noret luaD_throw (lua_State *L, int errcode) {
   }
   else {  /* thread has no error handler */
     global_State *g = G(L);
-    errcode = luaE_resetthread(L, errcode);  /* close all upvalues */
+    errcode = luaE_resetthread(L, errcode);  /* close all upvalues 关闭所有的上值*/
     if (g->mainthread->errorJmp) {  /* main thread has a handler? */
       setobjs2s(L, g->mainthread->top.p++, L->top.p - 1);  /* copy error obj. */
       luaD_throw(g->mainthread, errcode);  /* re-throw in main thread */
@@ -134,7 +134,9 @@ l_noret luaD_throw (lua_State *L, int errcode) {
   }
 }
 
-
+/*
+这里就是一个lua_longjmp
+*/
 int luaD_rawrunprotected (lua_State *L, Pfunc f, void *ud) {
   l_uint32 oldnCcalls = L->nCcalls; //Ccall的数量和不能挂起的数量
   struct lua_longjmp lj;
@@ -161,6 +163,7 @@ int luaD_rawrunprotected (lua_State *L, Pfunc f, void *ud) {
 
 /*
 ** Change all pointers to the stack into offsets.
+** // 将指针转换为偏移量 
 */
 static void relstack (lua_State *L) {
   CallInfo *ci;
@@ -178,6 +181,7 @@ static void relstack (lua_State *L) {
 
 /*
 ** Change back all offsets into pointers.
+** 利用偏移量设置指针 这个和上面的函数是互为逆操作
 */
 static void correctstack (lua_State *L) {
   CallInfo *ci;
@@ -272,6 +276,10 @@ int luaD_growstack (lua_State *L, int n, int raiseerror) {
 /*
 ** Compute how much of the stack is being used, by computing the
 ** maximum top of all call frames in the stack and the current top.
+** 当一个函数返回时：
+它的调用帧(CallInfo)被移除
+但是它的栈空间可能没有被立即回收
+外层函数的栈帧仍然引用着之前的高水位位置
 */
 static int stackinuse (lua_State *L) {
   CallInfo *ci;
@@ -753,7 +761,7 @@ static void unroll (lua_State *L, void *ud) {
     if (!isLua(ci))  /* C function? */
       finishCcall(L, ci);  /* complete its execution */
     else {  /* Lua function */
-      luaV_finishOp(L);  /* finish interrupted instruction */
+      luaV_finishOp(L);  /* finish interrupted instruction 完成中断的指令*/
       luaV_execute(L, ci);  /* execute down to higher C 'boundary' */
     }
   }
@@ -925,6 +933,7 @@ struct CloseP {
 
 /*
 ** Auxiliary function to call 'luaF_close' in protected mode.
+** 辅助函数
 */
 static void closepaux (lua_State *L, void *ud) {
   struct CloseP *pcl = cast(struct CloseP *, ud);
@@ -940,6 +949,7 @@ int luaD_closeprotected (lua_State *L, ptrdiff_t level, int status) {
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
   for (;;) {  /* keep closing upvalues until no more errors */
+    //一直关闭上值 直到没有错误发生
     struct CloseP pcl;
     pcl.level = restorestack(L, level); pcl.status = status;
     status = luaD_rawrunprotected(L, &closepaux, &pcl);
@@ -965,10 +975,10 @@ int luaD_closeprotected (lua_State *L, ptrdiff_t level, int status) {
 int luaD_pcall (lua_State *L, Pfunc func, void *u,
                 ptrdiff_t old_top, ptrdiff_t ef) {
   int status;
-  CallInfo *old_ci = L->ci;
-  lu_byte old_allowhooks = L->allowhook;
-  ptrdiff_t old_errfunc = L->errfunc;
-  L->errfunc = ef;
+  CallInfo *old_ci = L->ci;                 // 保存当前调用信息
+  lu_byte old_allowhooks = L->allowhook;    // 保存钩子允许状态
+  ptrdiff_t old_errfunc = L->errfunc;       // 保存旧的错误处理函数
+  L->errfunc = ef;                          // 设置新的错误处理函数
   status = luaD_rawrunprotected(L, func, u);
   if (l_unlikely(status != LUA_OK)) {  /* an error occurred? */
     L->ci = old_ci;
@@ -1027,6 +1037,8 @@ int luaD_protectedparser (lua_State *L, ZIO *z, const char *name,
   int status;
   incnny(L);  /* cannot yield during parsing */
   p.z = z; p.name = name; p.mode = mode;
+  //goto  
+  //定义的标签
   p.dyd.actvar.arr = NULL; p.dyd.actvar.size = 0;
   p.dyd.gt.arr = NULL; p.dyd.gt.size = 0;
   p.dyd.label.arr = NULL; p.dyd.label.size = 0;
