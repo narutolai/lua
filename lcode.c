@@ -1163,36 +1163,41 @@ static int jumponcond (FuncState *fs, expdesc *e, int cond) {
     if (GET_OPCODE(ie) == OP_NOT) {
       removelastinstruction(fs);  /* remove previous OP_NOT */
       return condjump(fs, OP_TEST, GETARG_B(ie), 0, 0, !cond);
+      //OP_TEST,/*	A k	if (not R[A] == k) then pc++			*/
     }
     /* else go through */
   }
   discharge2anyreg(fs, e);
   freeexp(fs, e);
   return condjump(fs, OP_TESTSET, NO_REG, e->u.info, 0, cond);
+  //OP_TESTSET,/*	A B k	if (not R[B] == k) then pc++ else R[A] := R[B] (*) */
 }
 
 
 /*
 ** Emit code to go through if 'e' is true, jump otherwise.
-** "如果 'e' 为真，则执行代码；否则e是false 就要跳转,跳转就要用pc记录下跳转的指令地址。
+** "如果 'e' 为真，则生成代码；否则e是false 就要跳转,跳转就要用pc记录下跳转的指令地址。
+** Emit 强调「动态生成指令」的动作，常见于编译器代码生成、汇编器或即时编译（JIT）场景
 */
 void luaK_goiftrue (FuncState *fs, expdesc *e) {
   int pc;  /* 新的跳转指令索引 */
   luaK_dischargevars(fs, e);
   switch (e->k) {
     case VJMP: {  /* condition? VJMP只有在codeeq  codeorder 里会生成 test and jmp a < b */
-      //所以 a<b 最终得到的就是一个VJMP表达式 pc是该表达式生产的jmp指令的索引index。这里赋值给pc
-      //就是将这个位置 插入 false列表
+      //当是 if a < b then xxx block 的时候 就是走这里 a < b 表达式本身就带有一个jmp指令
+      //e->u.info就是这个jmp指令的索引,我们获取这个jmp指令的索引给pc插入false list。 
+      //也就是说它也不用新生成 jmp指令了
       negatecondition(fs, e);  /* jump when it is false */
       pc = e->u.info;  /* save jump position */
       break;
     }
     case VK: case VKFLT: case VKINT: case VKSTR: case VTRUE: {
       pc = NO_JUMP;  /* always true; do nothing */
-      break;          //这种情况不会生成jmp指令 因为e永远是true
+      break;          //表达式是这些类型,则不用生成jmp指令 因为e永远是true
     }
     default: {
-      //这种情况需要得出表达式e的值，然后看是否是0 ，是0就是false哈 是false，那么就要生成false pc跳转指令
+      //这个函数是负责连续生成2个指令 OP_TEST或OP_TESTSET、 OP_JMP，pc返回的就是OP_JMP指令的索引 
+      //比如 if a then xxxx block 那么就是走这里 a是个变量
       pc = jumponcond(fs, e, 0);  /* if false 这里会生成jmp指令 如果e是false*/
       break;
     }

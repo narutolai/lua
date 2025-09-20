@@ -165,8 +165,43 @@ char* log_expdesc(const expdesc *exp) {
     
     return buffer;
 }
+#define LOG_BUFFER_SIZE 51
+char* log_FuncState(const FuncState* fs) {
+    if (fs == NULL) {
+        return strdup("FuncState: NULL");
+    }
 
+    char* buffer = (char*)malloc(LOG_BUFFER_SIZE);
+    if (buffer == NULL) {
+        return NULL;
+    }
 
+    snprintf(buffer, LOG_BUFFER_SIZE,
+        "f=%p, prev=%p, ls=%p, bl=%p, pc=%d, lasttarget=%d, previousline=%d, "
+        "nk=%d, np=%d, nabslineinfo=%d, firstlocal=%d, firstlabel=%d, "
+        "ndebugvars=%d, nactvar=%u, nups=%u, freereg=%u, iwthabs=%u, needclose=%u",
+        (void*)fs->f,
+        (void*)fs->prev,
+        (void*)fs->ls,
+        (void*)fs->bl,
+        fs->pc,
+        fs->lasttarget,
+        fs->previousline,
+        fs->nk,
+        fs->np,
+        fs->nabslineinfo,
+        fs->firstlocal,
+        fs->firstlabel,
+        fs->ndebugvars,
+        (unsigned int)fs->nactvar,
+        (unsigned int)fs->nups,
+        (unsigned int)fs->freereg,
+        (unsigned int)fs->iwthabs,
+        (unsigned int)fs->needclose
+    );
+
+    return buffer;
+}
 /* maximum number of local variables per function (must be smaller
    than 250, due to the bytecode format) */
 #define MAXVARS		200
@@ -1762,7 +1797,7 @@ static void labelstat (LexState *ls, TString *name, int line) {
   createlabel(ls, name, line, block_follow(ls, 0));
 }
 
-
+//解析whilestat
 static void whilestat (LexState *ls, int line) {
   /* whilestat -> WHILE cond DO block END */
   FuncState *fs = ls->fs;
@@ -1770,40 +1805,58 @@ static void whilestat (LexState *ls, int line) {
   int condexit;
   BlockCnt bl;
   luaX_next(ls);  /* skip WHILE */
-  whileinit = luaK_getlabel(fs);
-  condexit = cond(ls);
+  whileinit = luaK_getlabel(fs); //这个返回的就是fs->pc
+  condexit = cond(ls); //开始解析 cond  返回的是v.f 
   enterblock(fs, &bl, 1);
   checknext(ls, TK_DO);
-  block(ls);
-  luaK_jumpto(fs, whileinit);
+  block(ls);                  //如果这个block里有 if xxx then break end
+  //！！！while语句的关键,block的最后生成了一个跳转指令跳转回到cond指令 这样就实现了while循环
+  luaK_jumpto(fs, whileinit); 
   check_match(ls, TK_END, TK_WHILE, line);
   leaveblock(fs);
   luaK_patchtohere(fs, condexit);  /* false conditions finish the loop */
 }
 
-
+//注意这个lua的repeat until 和 c语言的 do{} while(cond) 是不一样的
+//解析repeat语句 repeat block until cond==true 
+//为什么这个repeat until 需要2个block呢,因为它会先执行一遍循环体的代码 再判断 cond.
 static void repeatstat (LexState *ls, int line) {
   /* repeatstat -> REPEAT block UNTIL cond */
   int condexit;
   FuncState *fs = ls->fs;
   int repeat_init = luaK_getlabel(fs);
   BlockCnt bl1, bl2;
-  enterblock(fs, &bl1, 1);  /* loop block */
-  enterblock(fs, &bl2, 0);  /* scope block */
+  enterblock(fs, &bl1, 1);  /* loop block ：管理循环的跳转标签和 break 语句的目标*/
+  enterblock(fs, &bl2, 0);  /* scope block 管理循环体内声明的局部变量和上值（upvalues）*/
+  // 为什么要分开？
+  // 因为循环控制和变量作用域是两个不同的概念：
+  // 循环需要自己的控制结构（标签、跳转）
+  // 循环体需要自己的变量作用域（局部变量、闭包）
+  //注意现在的是 b11-->bl2
   luaX_next(ls);  /* skip REPEAT */
   statlist(ls);
   check_match(ls, TK_UNTIL, TK_REPEAT, line);
+  //编译条件表达式，返回 jump_pc跳转
   condexit = cond(ls);  /* read condition (inside scope block) */
   leaveblock(fs);  /* finish scope */
-  if (bl2.upval) {  /* upvalues? */
+  //先离开 scope block
+  if (bl2.upval) {  /* upvalues? 怎么样子的lua代码才可以让这个bl2有upval??*/
+    // repeat
+    //     local a = 1
+    //     local function test2()
+    //         a = a + 1
+    //     end
+    // until true
     int exit = luaK_jump(fs);  /* normal exit must jump over fix */
     luaK_patchtohere(fs, condexit);  /* repetition must close upvalues */
     luaK_codeABC(fs, OP_CLOSE, reglevel(fs, bl2.nactvar), 0, 0);
     condexit = luaK_jump(fs);  /* repeat after closing upvalues */
     luaK_patchtohere(fs, exit);  /* normal exit comes to here */
   }
+  //所以 a 为 false的时候
   luaK_patchlist(fs, condexit, repeat_init);  /* close the loop */
   leaveblock(fs);  /* finish loop */
+  //离开 loop block
 }
 
 
@@ -1863,7 +1916,7 @@ static void forbody (LexState *ls, int base, int line, int nvars, int isgen) {
   luaK_fixline(fs, line);
 }
 
-
+//for i = 1,1 do xxx end
 static void fornum (LexState *ls, TString *varname, int line) {
   /* fornum -> NAME = exp,exp[,exp] forbody */
   FuncState *fs = ls->fs;
@@ -1887,6 +1940,35 @@ static void fornum (LexState *ls, TString *varname, int line) {
 }
 
 
+/*
+local function myiter(tbl,index)
+    index = (index or 0) + 1
+    local val = tbl[index]
+    if val then 
+        return index,val
+    end
+end
+-- 示例 2: 自定义迭代器（返回三个值）
+local tbl = {100, 200, 300}
+for idx, val in myiter,tbl do
+    print(idx, val)  -- 输出: 1 100 extra, 2 200 extra, 3 300 extra
+end
+这个explist 其实是 func1,arg1,arg2 这样的,这个func1返回nil的时候，就停止循环了
+
+//explist ==> expr { ',' expr }
+//但是for循环主要使用来迭代的
+//forlist -> NAME {,NAME} IN explist forbody
+
+//其实它类比下面这么一个while循环
+while true do
+  expr { ',' expr }
+  local name {,name} = expr1(expr2,...,exprn)
+  if not idx then
+    break
+  end
+end
+*/
+//for var1,var2 in pairs()
 static void forlist (LexState *ls, TString *indexname) {
   /* forlist -> NAME {,NAME} IN explist forbody */
   FuncState *fs = ls->fs;
@@ -1914,7 +1996,7 @@ static void forlist (LexState *ls, TString *indexname) {
   forbody(ls, base, line, nvars - 4, 1);
 }
 
-
+//for语句还蛮复杂的
 static void forstat (LexState *ls, int line) {
   /* forstat -> FOR (fornum | forlist) END */
   FuncState *fs = ls->fs;
@@ -1924,8 +2006,9 @@ static void forstat (LexState *ls, int line) {
   luaX_next(ls);  /* skip 'for' */
   varname = str_checkname(ls);  /* first variable name */
   switch (ls->t.token) {
-    case '=': fornum(ls, varname, line); break;
-    case ',': case TK_IN: forlist(ls, varname); break;
+    //for语句的2种迭代方式
+    case '=': fornum(ls, varname, line); break; //for i = 1,1 do xxx end
+    case ',': case TK_IN: forlist(ls, varname); break; //for var1,var2 in pairs()
     default: luaX_syntaxerror(ls, "'=' or 'in' expected");
   }
   check_match(ls, TK_END, TK_FOR, line);
@@ -2091,7 +2174,7 @@ static int funcname (LexState *ls, expdesc *v) {
   return ismethod;
 }
 
-
+//要么是表的方法，要么是全局函数
 static void funcstat (LexState *ls, int line) {
   /* funcstat -> FUNCTION funcname body */
   int ismethod;
