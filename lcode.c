@@ -409,7 +409,7 @@ static void removelastinstruction (FuncState *fs) {
 extern char* get_opcode_name(OpCode op);
 int luaK_code (FuncState *fs, Instruction i) { 
   OpCode o=GET_OPCODE(i);
-  //fprintf(llex_file,"luaK_code gen a new code: %s\n",get_opcode_name(o));
+  fprintf(llex_file,"luaK_code gen a new code: %s, %d\n",get_opcode_name(o),o);
   Proto *f = fs->f;
   /* put new instruction in code array */
   luaM_growvector(fs->ls->L, f->code, fs->pc, f->sizecode, Instruction,
@@ -780,15 +780,22 @@ static void str2K (FuncState *fs, expdesc *e) {
 ** become VRELOC (as OP_VARARG puts its results where it wants).
 ** (Calls are created returning one result, so that does not need
 ** to be fixed.)
+** 这是一个用于修正表达式返回结果数量的函数，主要功能是确保表达式最终只返回一个结果
 */
 void luaK_setoneret (FuncState *fs, expdesc *e) {
+  //背景：Lua中函数调用默认返回多个结果，但某些上下文只需要一个结果
   if (e->k == VCALL) {  /* expression is an open function call? */
-    /* already returns 1 value */
+    /* already returns 1 value 断言确认指令参数C的值为2（表示返回1个结果）*/
     lua_assert(GETARG_C(getinstruction(fs, e)) == 2);
     e->k = VNONRELOC;  /* result has fixed position */
     e->u.info = GETARG_A(getinstruction(fs, e));
+    //将表达式信息设置为函数调用的第一个返回值的寄存器位置
   }
   else if (e->k == VVARARG) {
+//     背景：可变参数表达式...可能返回多个值
+// 操作：
+// 设置指令参数C为2（限制只返回1个结果）
+// 将表达式类型改为VRELOC（可重定位值），便于后续优化
     SETARG_C(getinstruction(fs, e), 2);
     e->k = VRELOC;  /* can relocate its simple result */
   }
@@ -801,7 +808,7 @@ void luaK_setoneret (FuncState *fs, expdesc *e) {
 ** 确保表达式不是一个变量,这里是可能会有指令生成的
 */
 void luaK_dischargevars (FuncState *fs, expdesc *e) {
-  //fprintf(llex_file,"before luaK_dischargevars expdesc: %s\n", log_expdesc(e));
+  fprintf(llex_file,"luaK_dischargevars >>>>>>>>>>>>>> %s\n", log_expdesc(e));
   switch (e->k) {
     case VCONST: {
       const2exp(const2val(fs, e), e);//根据常量的值类型来确定表达式e的类型
@@ -814,6 +821,7 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
       break;
     }
     case VUPVAL: {  /* move value to some (pending) register */
+      // 如果是上值,那就获取这个上值
       e->u.info = luaK_codeABC(fs, OP_GETUPVAL, 0, e->u.info, 0);
       e->k = VRELOC;
       //表达式需要重定位，重定位啥??指令的A域,就是这个指令的值还不知道放哪个寄存器那。
@@ -849,7 +857,7 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
     }
     default: break;  /* there is one value available (somewhere) */
   }
-  //fprintf(llex_file,"after luaK_dischargevars expdesc: %s\n", log_expdesc(e));
+  fprintf(llex_file,"luaK_dischargevars <<<<<<<<<<<<<< %s\n", log_expdesc(e));
 }
 /*
 **  Ensure expression value is in register 'reg', making 'e' a non-relocatable expression.
@@ -857,7 +865,7 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
 ** 确保表达式的值在寄存器里 让e变成一个不需要重定位的表达式(当然依旧可以有跳转指令)
 */
 static void discharge2reg (FuncState *fs, expdesc *e, int reg) {
-  //fprintf(llex_file,"before discharge2reg expdesc: %s\n", log_expdesc(e));
+  fprintf(llex_file,"discharge2reg >>>>>>>>>>>>>>> %s\n", log_expdesc(e));
   luaK_dischargevars(fs, e);                //把e->k转属于下面的case之一
   switch (e->k) {
     case VNIL: {
@@ -904,7 +912,7 @@ static void discharge2reg (FuncState *fs, expdesc *e, int reg) {
   }
   e->u.info = reg;        //e->u.info 是表达式的值存放的寄存器位置
   e->k = VNONRELOC;       //最终不需要重定位
-  //fprintf(llex_file,"after discharge2reg expdesc: %s\n", log_expdesc(e));
+  fprintf(llex_file,"discharge2reg <<<<<<<<<<<<<<< %s\n", log_expdesc(e));
 }
 
 
@@ -1085,14 +1093,18 @@ static void codeABRK (FuncState *fs, OpCode o, int a, int b,
 ** 产生代码 把表达式ex的结果存到 var 里 var  <--- ex
 ** 比如 local a = {}, a[1] = 1
 ** 好像之前没看过这个函数
+** 这个很重要的，这个处理了所有的赋值
 */
 void luaK_storevar (FuncState *fs, expdesc *var, expdesc *ex) {
+  fprintf(llex_file,"luaK_storevar >>>>>>>>>>>>>>>>>>>>\n");
   switch (var->k) {
     case VLOCAL: {
       freeexp(fs, ex);
       exp2reg(fs, ex, var->u.var.ridx);  /* compute 'ex' into proper place */
+      fprintf(llex_file,"luaK_storevar <<<<<<<<<<<<<<<<<<\n");
       return;
     }
+    //如果var是下面的类型
     case VUPVAL: {
       int e = luaK_exp2anyreg(fs, ex);
       luaK_codeABC(fs, OP_SETUPVAL, e, var->u.info, 0);
@@ -1117,11 +1129,13 @@ void luaK_storevar (FuncState *fs, expdesc *var, expdesc *ex) {
     default: lua_assert(0);  /* invalid var kind to store */
   }
   freeexp(fs, ex);
+  fprintf(llex_file,"luaK_storevar <<<<<<<<<<<<<<<<<<<<<<\n");
 }
 
 
 /*
 ** Emit SELF instruction (convert expression 'e' into 'e:key(e,').
+** 将表达式转成 e:key(e,)
 */
 void luaK_self (FuncState *fs, expdesc *e, expdesc *key) {
   int ereg;
@@ -1332,14 +1346,20 @@ static int isSCnumber (expdesc *e, int *pi, int *isfloat) {
 ** 这个函数 luaK_indexed 是 Lua 编译器中的一个函数，用于生成表索引表达式（table indexing expression），
 即类似于 t[k] 的表达式。它的作用是将表 t 和键 k 的信息组合起来，
 生成一个索引表达式的中间表示，并更新 expdesc 结构体 t 以反映这个操作
+换句话说在处理完毕后,t的
 */
 void luaK_indexed (FuncState *fs, expdesc *t, expdesc *k) {
+  fprintf(llex_file,"luaK_indexed >>>>>>>>>>>>>>>>>> tab:%s, key:%s\n", log_expdesc(t),log_expdesc(k));
   if (k->k == VKSTR)
     str2K(fs, k);
   lua_assert(!hasjumps(t) &&
              (t->k == VLOCAL || t->k == VNONRELOC || t->k == VUPVAL));
   if (t->k == VUPVAL && !isKstr(fs, k))  /* upvalue indexed by non 'Kstr'? */
-    luaK_exp2anyreg(fs, t);  /* put it in a register */
+    luaK_exp2anyreg(fs, t);  /* put it in a register 为啥用非字符串索引上值表数据就要把表放到栈上?*/
+  
+  //如果不是用字符串索引上值,就会把这个上值取到寄存器栈中,
+  //反正这个表变成了到栈上 然后 t->u.info 就变成了表的位置 t->k应该是VNONRELOC
+  //然后这样的话
   if (t->k == VUPVAL) {
     t->u.ind.t = t->u.info;  /* upvalue index */
     t->u.ind.idx = k->u.info;  /* literal string */
@@ -1347,6 +1367,7 @@ void luaK_indexed (FuncState *fs, expdesc *t, expdesc *k) {
   }
   else {
     /* register index of the table 表的栈索引*/
+    //如果 t->k = VLOCAL 则寄存器位置 
     t->u.ind.t = (t->k == VLOCAL) ? t->u.var.ridx: t->u.info;
     if (isKstr(fs, k)) {
       t->u.ind.idx = k->u.info;  /* literal string */
@@ -1361,6 +1382,7 @@ void luaK_indexed (FuncState *fs, expdesc *t, expdesc *k) {
       t->k = VINDEXED;
     }
   }
+  fprintf(llex_file,"luaK_indexed <<<<<<<<<<<<<<<<<< tab:%s, key:%s\n", log_expdesc(t),log_expdesc(k));
 }
 
 
@@ -1386,7 +1408,7 @@ static int validop (int op, TValue *v1, TValue *v2) {
 
 /*
 ** Try to "constant-fold" an operation; return 1 iff successful.
-** (In this case, 'e1' has the final result.)
+** (In this case, 'e1' has the final result.)常量折叠
 */
 static int constfolding (FuncState *fs, int op, expdesc *e1,
                                         const expdesc *e2) {
@@ -1670,16 +1692,16 @@ static void codeeq (FuncState *fs, BinOpr opr, expdesc *e1, expdesc *e2) {
 */
 void luaK_prefix (FuncState *fs, UnOpr opr, expdesc *e, int line) {
   static const expdesc ef = {VKINT, {0}, NO_JUMP, NO_JUMP};
-  luaK_dischargevars(fs, e);
-  switch (opr) {
+  luaK_dischargevars(fs, e);  //
+  switch (opr) {// -操作符 ~位非运算
     case OPR_MINUS: case OPR_BNOT:  /* use 'ef' as fake 2nd operand */
-      if (constfolding(fs, opr + LUA_OPUNM, e, &ef))
+      if (constfolding(fs, opr + LUA_OPUNM, e, &ef))//常量折叠
         break;
       /* else */ /* FALLTHROUGH */
-    case OPR_LEN:
+    case OPR_LEN://#取长度操作符 把 opr操作符直接转成指令
       codeunexpval(fs, unopr2op(opr), e, line);
       break;
-    case OPR_NOT: codenot(fs, e); break;
+    case OPR_NOT: codenot(fs, e); break; //not 操作符
     default: lua_assert(0);
   }
 }
@@ -1693,15 +1715,15 @@ void luaK_prefix (FuncState *fs, UnOpr opr, expdesc *e, int line) {
 void luaK_infix (FuncState *fs, BinOpr op, expdesc *v) {
   luaK_dischargevars(fs, v);
   switch (op) {
-    case OPR_AND: {
+    case OPR_AND: { //and 
       luaK_goiftrue(fs, v);  /* go ahead only if 'v' is true */
-      break;
+      break;// 比如 local res = a and xx 那么如果a为true, 就继续往右解析
     }
-    case OPR_OR: {
+    case OPR_OR: { // or
       luaK_goiffalse(fs, v);  /* go ahead only if 'v' is false */
-      break;
+      break;//比如 loca res = a or xxx  那么如果a为false，就继续往右解析
     }
-    case OPR_CONCAT: {
+    case OPR_CONCAT: {//这个是..运算符 链接运算符
       luaK_exp2nextreg(fs, v);  /* operand must be on the stack */
       break; 
     }
@@ -1710,20 +1732,20 @@ void luaK_infix (FuncState *fs, BinOpr op, expdesc *v) {
     case OPR_MOD: case OPR_POW:
     case OPR_BAND: case OPR_BOR: case OPR_BXOR:
     case OPR_SHL: case OPR_SHR: {
-      if (!tonumeral(v, NULL))
+      if (!tonumeral(v, NULL))  // + - * / 等等运算符
         luaK_exp2anyreg(fs, v);
       /* else keep numeral, which may be folded or used as an immediate
          operand */
       break;
     }
-    case OPR_EQ: case OPR_NE: {
+    case OPR_EQ: case OPR_NE: { //== !=
       if (!tonumeral(v, NULL))
         luaK_exp2RK(fs, v);
       /* else keep numeral, which may be an immediate operand */
       break;
     }
     case OPR_LT: case OPR_LE:
-    case OPR_GT: case OPR_GE: {
+    case OPR_GT: case OPR_GE: {// >, >=, <, <=
       int dummy, dummy2;
       if (!isSCnumber(v, &dummy, &dummy2))
         luaK_exp2anyreg(fs, v);

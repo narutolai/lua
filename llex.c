@@ -653,7 +653,7 @@ void luaX_next (LexState *ls) {
   }
   else
     ls->t.token = llex(ls, &ls->t.seminfo);  /* read next token */
-  //ShowParseLog(ls);
+  ShowParseLog(ls);
 }
 
 

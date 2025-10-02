@@ -24,6 +24,8 @@
 一个 `expdesc` 结构体描述了一个可能被延迟处理的变量/表达式。
 它包含对其“主要”值的描述，以及一个条件跳转列表，
 这些条件跳转也可以产生该表达式的值（由短路运算符 `and`/`or` 生成）。
+
+什么是e呢 就是运算
 */
 typedef enum {
   VVOID,      /* 当 'expdesc' 描述一个列表的最后一个表达式时，这种类型表示一个空列表（即没有表达式） */
@@ -38,10 +40,10 @@ typedef enum {
   VLOCAL,     /* 局部变量；var.ridx = 寄存器索引；var.vidx = 在 'actvar.arr' 中的相对索引 */
   VUPVAL,     /* 上值变量；info = 上值在 'upvalues' 中的索引 */
   VCONST,     /* 编译时 <const> 变量；info = 在 'actvar.arr' 中的绝对索引 */
-  VINDEXED,   /* 索引变量；ind.t = 表在的寄存器index；ind.idx = 键的 R 索引 */
-  VINDEXUP,   /* 索引上值；ind.t = 表在上值的index；ind.idx = 键的 K 索引 */
-  VINDEXI,    /* 带有常量整数的索引变量；ind.t = 表寄存器；ind.idx = 键的值 */
-  VINDEXSTR,  /* 带有字面字符串的索引变量；ind.t = 表寄存器；ind.idx = 键的 K 索引 */
+  VINDEXUP,   /* 上值表的索引；ind.t = 表在上值的index；ind.idx = 键的 K 索引 */
+  VINDEXED,   /* 寄存器上的表索引；ind.t = 表在的寄存器index；ind.idx = 键的 R 索引 */
+  VINDEXI,    /* 寄存器表整形索引；ind.t = 表寄存器；ind.idx = 键的值 */
+  VINDEXSTR,  /* 寄存器表字符串索引；ind.t = 表寄存器；ind.idx = 键的 K 索引 */
   VJMP,       /* 表达式是一个测试/比较；info = 对应跳转指令的程序计数器 */
   VRELOC,     /* 表达式可以将结果放在任何寄存器中；info = 指令的程序计数器 */
   VCALL,      /* 表达式是一个函数调用；info = 指令的程序计数器 */

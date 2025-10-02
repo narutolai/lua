@@ -2068,16 +2068,17 @@ static void fullinc(lua_State *L, global_State *g)
   /* finish any pending sweep phase to start a new cycle */
   /*推动 GC 状态机运行，直到达到目标状态 GCSpause（暂停状态）
   目的是完成当前未完成的 GC 周期（如果有），避免与新周期冲突。*/
-
   luaC_runtilstate(L, bitmask(GCSpause));
+
   /*推动 GC 状态机到 GCScallfin 状态：
   依次经历标记（Mark）、清扫（Sweep）等阶段，并执行终结器（__gc 元方法）。
   这是增量 GC 的核心逻辑：分阶段完成标记和回收*/
-
   luaC_runtilstate(L, bitmask(GCScallfin)); /* run up to finalizers */
+
   /* estimate must be correct after a full GC cycle */
   // 估算值 是否等于实际值
   lua_assert(g->GCestimate == gettotalbytes(g));
+
   /*再次推动到 GCSpause：确保 GC 周期完全结束。
   setpause(g): 根据当前内存使用情况，设置下一次触发 GC 的暂停阈值（g->gcpause）*/
   luaC_runtilstate(L, bitmask(GCSpause)); /* finish collection */
