@@ -718,6 +718,7 @@ static void luaK_float (FuncState *fs, int reg, lua_Number f) {
 
 /*
 ** Convert a constant in 'v' into an expression description 'e'
+** 将常量v转成表达式e, 数字 浮点数 true false nil 字符串
 */
 static void const2exp (TValue *v, expdesc *e) {
   switch (ttypetag(v)) {
@@ -806,6 +807,17 @@ void luaK_setoneret (FuncState *fs, expdesc *e) {
 ** Ensure that expression 'e' is not a variable (nor a <const>).
 ** (Expression still may have jump lists.)
 ** 确保表达式不是一个变量,这里是可能会有指令生成的
+** 作用: 这是代码生成过程中的一个核心“规范化”或“降低（lowering）”函数。
+** 它的主要职责是处理表达式（expdesc）中涉及变量访问的复杂情况，将它们“卸货”或“ discharge”为更简单、更接近虚拟机指令的形式。
+** 核心思想: 将一个表达式（可能表示一个变量名、一个表访问等）转换为一个最终可以存储在寄存器中的值，
+** 并生成必要的指令来实现这一转换
+** 1.首先是所有的常量转成表达式
+** 2.VLPOCAL--->VNORELOC   --局部变量不需要重定位
+** 3.VUPVAL,VINDEXUP,VINDEXI,VINDEXSTR,VINDEXED--->VRELOC 表示指令存放结果的寄存器位置需要需求
+** 总结一下：
+  变量是数据的容器和名字标签。
+  表达式是操作这些容器和数据来生成新值的方法。
+  几乎所有的编程都是围绕着“如何定义变量”和“如何编写表达式来操作这些变量”进行的
 */
 void luaK_dischargevars (FuncState *fs, expdesc *e) {
   fprintf(llex_file,"luaK_dischargevars >>>>>>>>>>>>>> %s\n", log_expdesc(e));
@@ -817,7 +829,7 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
     case VLOCAL: {  /* already in a register */
       e->u.info = e->u.var.ridx;
       e->k = VNONRELOC;  /* becomes a non-relocatable value */
-      //不需要重定位 已经在寄存器中
+      // 不需要重定位 已经在寄存器中
       break;
     }
     case VUPVAL: {  /* move value to some (pending) register */
@@ -834,18 +846,18 @@ void luaK_dischargevars (FuncState *fs, expdesc *e) {
       break;
     }
     case VINDEXI: {
-      freereg(fs, e->u.ind.t);
+      freereg(fs, e->u.ind.t);//t可能放在一个临时寄存器中 比如 local a = test()[1],test
       e->u.info = luaK_codeABC(fs, OP_GETI, 0, e->u.ind.t, e->u.ind.idx);
       e->k = VRELOC;
       break;
     }
     case VINDEXSTR: {
-      freereg(fs, e->u.ind.t);
+      freereg(fs, e->u.ind.t);//t可能放在一个临时寄存器中
       e->u.info = luaK_codeABC(fs, OP_GETFIELD, 0, e->u.ind.t, e->u.ind.idx);
       e->k = VRELOC;
       break;
     }
-    case VINDEXED: {
+    case VINDEXED: {      //t 和 key 可能放在一个临时寄存器中
       freeregs(fs, e->u.ind.t, e->u.ind.idx);
       e->u.info = luaK_codeABC(fs, OP_GETTABLE, 0, e->u.ind.t, e->u.ind.idx);
       e->k = VRELOC;
@@ -1367,17 +1379,17 @@ void luaK_indexed (FuncState *fs, expdesc *t, expdesc *k) {
   }
   else {
     /* register index of the table 表的栈索引*/
-    //如果 t->k = VLOCAL 则寄存器位置 
-    t->u.ind.t = (t->k == VLOCAL) ? t->u.var.ridx: t->u.info;
-    if (isKstr(fs, k)) {
+    //如果 t->k = VLOCAL 则寄存器位置
+    t->u.ind.t = (t->k == VLOCAL) ? t->u.var.ridx: t->u.info;//t->k == VNONRELOC(这是一个函数调用表达式，其结果（返回的表）会被计算并放入一个临时寄存器。)
+    if (isKstr(fs, k)) {  //key是字符串
       t->u.ind.idx = k->u.info;  /* literal string */
       t->k = VINDEXSTR;
     }
-    else if (isCint(k)) {
+    else if (isCint(k)) {//key是整形
       t->u.ind.idx = cast_int(k->u.ival);  /* int. constant in proper range */
       t->k = VINDEXI;
     }
-    else {
+    else {          //key是变量
       t->u.ind.idx = luaK_exp2anyreg(fs, k);  /* register */
       t->k = VINDEXED;
     }

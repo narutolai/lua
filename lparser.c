@@ -510,7 +510,7 @@ static LocVar *localdebuginfo (FuncState *fs, int vidx) {
 ** Create an expression representing variable 'vidx'
 ** local a = {}
 ** a[1] = 1
-** 创建一个表达式来代表vidx处的变量
+** 创建一个表达式来代表vidx处的变量(当然是局部变量了)
 ** 这个函数只会在searchval里调用 也就是找一个变量的时候
 */
 static void init_var (FuncState *fs, expdesc *e, int vidx) {
@@ -571,6 +571,7 @@ const char* get_kind_name(lu_byte kind) {
         default:         return "UNKNOWN";
     }
 }
+//这里就是设置Vardesc的 ridx 和 pidx
 static void adjustlocalvars (LexState *ls, int nvars) {
   FuncState *fs = ls->fs;                    // 获取当前函数的编译状态
   int reglevel = luaY_nvarstack(fs);         // 获取当前栈层级/下一个可用的寄存器索引
@@ -1405,8 +1406,9 @@ static void funcargs (LexState *ls, expdesc *f, int line) {
       if (ls->t.token == ')')  /* arg list is empty? */
         args.k = VVOID;
       else {
-        explist(ls, &args);
-        if (hasmultret(args.k))
+        explist(ls, &args); //这里的args是最后一个exp
+        //args.k = vcall 或者 vvararg
+        if (hasmultret(args.k))//通过这个我们可以知道，多重返回只能出现在最后，不能在中间
           luaK_setmultret(fs, &args);
       }
       check_match(ls, ')', '(', line);
@@ -1489,14 +1491,14 @@ static void suffixedexp (LexState *ls, expdesc *v) {
         fieldsel(ls, v); // a.b
         break;
       }
-      case '[': {  /* '[' exp ']' */
+      case '[': {  /* '[' exp ']' , a['exp']*/
         expdesc key;
         luaK_exp2anyregup(fs, v);
         yindex(ls, &key);
         luaK_indexed(fs, v,  &key);
         break;
       }
-      case ':': {  /* ':' NAME funcargs */
+      case ':': {  /* ':' NAME funcargs  a:func() */
         expdesc key;
         luaX_next(ls);
         codename(ls, &key);
@@ -1504,7 +1506,7 @@ static void suffixedexp (LexState *ls, expdesc *v) {
         funcargs(ls, v, line);
         break;
       }
-      case '(': case TK_STRING: case '{': {  /* funcargs */
+      case '(': case TK_STRING: case '{': {  /* funcargs  a(...)*/
         luaK_exp2nextreg(fs, v);
         funcargs(ls, v, line);
         break;
@@ -1550,7 +1552,7 @@ static void simpleexp (LexState *ls, expdesc *v) {
       init_exp(v, VFALSE, 0);
       break;
     }
-    case TK_DOTS: {  /* vararg */
+    case TK_DOTS: {  /* vararg 变参 ... 也是可以被表达式的*/
       FuncState *fs = ls->fs;
       check_condition(ls, fs->f->is_vararg,
                       "cannot use '...' outside a vararg function");
@@ -2437,7 +2439,7 @@ LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
   /* all scopes should be correctly finished */
   lua_assert(dyd->actvar.n == 0 && dyd->gt.n == 0 && dyd->label.n == 0);
   L->top.p--;  /* remove scanner's table */
-  ShowParselog("luaY_parser <<<<<<<<<<<<<<<<<<<<<<<");
+  ShowParselog("luaY_parser  <<<<<<<<<<<<<<<<<<<<<<<");
   return cl;  /* closure is on the stack, too */
 }
 
