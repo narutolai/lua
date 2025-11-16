@@ -500,6 +500,7 @@ static void restartcollection(global_State *g)
   markobject(g, g->mainthread); // 直接链到灰色链表,标灰色
   markvalue(g, &g->l_registry); // 直接链到灰色链表,标灰色 l_registry是TValue
   markmt(g);
+  //为什么要重新标记，因为已经换了另一种白色!!!
   markbeingfnz(g); /* mark any finalizing object left from previous cycle */
 }
 
@@ -624,7 +625,7 @@ static int traverseephemeron(global_State *g, Table *h, int inv)
       marked = 1;     
       reallymarkobject(g, gcvalue(gval(n))); /* 标记值 */
       /*
-        只有当ephemeron中的key已经标记为可达，才跟踪相应的value
+        只有当ephemeron中的key已经标记为可达，才标记相应的value
       */
     }
   }
@@ -1324,6 +1325,12 @@ void luaC_checkfinalizer(lua_State *L, GCObject *o, Table *mt)
 设置启动新一轮垃圾回收（GC）周期前的“等待时间”；当内存使用量达到阈值（即 'estimate' * pause / PAUSEADJ）时，
 周期将启动。
 （对 'estimate' 的除法运算是安全的：它不可能为零，因为 Lua 启动时所需的内存不可能低于 PAUSEADJ 字节）。
+
+核心目标：计算并设置一个巨大的“信用”（一个很大的负值 GCdebt），
+让 GC 进入长时间的休眠（暂停）。休眠将持续到应用程序分配了足够多的新内存，消耗完这个“信用”，从而再次触发新一轮的 GC。
+g->gcpause GC 暂停参数（默认值 200）
+g->gcstepszie 
+g->stepmul 
 */
 static void setpause(global_State *g)
 {
@@ -1895,10 +1902,10 @@ static lu_mem atomic(lua_State *L)
   /* at this point, all resurrected(复活的) objects are marked. */
   /* remove dead objects from weak tables */
   fprintf(log_file, "gcoplog:atomic clearbykeys from ephemeron list(tables)....... \n");
-  clearbykeys(g, g->ephemeron); /* clear keys from all ephemeron tables */
+  clearbykeys(g, g->ephemeron); /* clear keys from all ephemeron tables 清除该弱引用*/
 
   fprintf(log_file, "gcoplog:atomic clearbykeys from allweak list(tables)........\n");
-  clearbykeys(g, g->allweak);   /* clear keys from all 'allweak' tables */
+  clearbykeys(g, g->allweak);   /* clear keys from all 'allweak' tables 清除该弱引用*/
 
   /* clear values from resurrected(复活的) weak tables */
   fprintf(log_file, "gcoplog:atomic clearbyvalues in weak list and  allweak list........\n");
@@ -1947,7 +1954,7 @@ static lu_mem singlestep(lua_State *L)
 {
   global_State *g = G(L);
   count = count + 1;
-  ShowGcState(g, "\n\n\n\n\n\n\n\n 进入 singlestep.................>>>>>>>>>>>>>>>>>>>>>>>>>>>>",count);
+  ShowGcState(g, "\n\n\n\n\n\n\n\n enter singlestep.................>>>>>>>>>>>>>>>>>>>>>>>>>>>>",count);
   lu_mem work;
   lua_assert(!g->gcstopem); /* collector is not reentrant */
   g->gcstopem = 1;          /* 禁止紧急collection */
@@ -2062,9 +2069,10 @@ static void incstep(lua_State *L, global_State *g)
   // GC 步进乘数（避免除零，强制至少为 1）
   int stepmul = (getgcparam(g->gcstepmul) | 1); /* avoid division by 0 */
   // GCdebt是待回收的字节数,通过 WORK2MEM 转换为工作单元，再乘以 stepmul 调整步进速度
-  // 待处理的回收单元数?
+  // 待处理的回收单元数?当程序分配内存时，GCdebt 会增加。GC 的工作就是偿还这笔“债务
   l_mem debt = (g->GCdebt / WORK2MEM) * stepmul; // 待处理的 GC 债务（单位：工作单元TValue）
   // 计算 stepsize（单步最大工作量）
+  //stepsize 的含义: 你可以理解为“允许的债务透支额度”。它决定了 debt 可以变成多大的负数（即GC工作超额完成多少）才停止。
   l_mem stepsize = (g->gcstepsize <= log2maxs(l_mem))
                        ? ((cast(l_mem, 1) << g->gcstepsize) / WORK2MEM) * stepmul
                        : MAX_LMEM; /* overflow; keep maximum value */
