@@ -30,6 +30,17 @@ FILE *log_file = NULL;
 ** Maximum number of elements to sweep in each single step.
 ** (Large enough to dissipate fixed overheads but small enough
 ** to allow small steps for the collector.)
+
+Large enough to dissipate fixed overheads (足够大以分摊固定开销)
+每次启动一个清除步骤，GC器本身都有一些固定的开销（例如，查找需要清理的链表、更新状态等）。
+如果这个最大值设置得太小（比如 1），那么为了清理100个对象，GC就需要启动100个步骤。
+这意味着固定开销会被重复100次，效率非常低下。将 GCSWEEPMAX 设置为一个足够大的值（如 100），
+可以确保每次步骤都能完成有意义的工作量，从而有效分摊这些固定开销，提高整体效率。
+
+Small enough to allow small steps for the collector (足够小以允许收集器小步进行)
+这是增量式回收的核心目标：避免长停顿。如果这个值设置得太大（比如 10000），
+那么单次GC步骤可能需要很长时间才能完成，这会导致程序看起来“卡住”了。
+将其设置为一个较小的值，可以确保每次GC工作都能快速完成，从而保证程序的响应性和平滑性。
 */
 #define GCSWEEPMAX 100
 
@@ -352,15 +363,24 @@ static void reallymarkobject(global_State *g, GCObject *o)
   case LUA_VLNGSTR:
   {
     set2black(o); /* 长短字符串直接变黑意味着他们永远不会被回收 */
+    TString *ts = gco2ts(o);
+    fprintf(log_file, "gcoplog:reallymarkobject mark str:%s(%p) to black\n", getstr(ts),o);
     break;
   }
   case LUA_VUPVAL:
   {
     UpVal *uv = gco2upv(o);
     if (upisopen(uv))
+     {
       set2gray(uv); /* open upvalues are kept gray 开放上值保持灰色*/
+      fprintf(log_file, "gcoplog:reallymarkobject mark open upval:%p to gray\n", o);
+     } 
     else
+    {
       set2black(uv);       /* closed upvalues are visited here 关闭上值直接置黑色*/
+      fprintf(log_file, "gcoplog:reallymarkobject mark close upval:%p to black\n", o);
+    }
+    fprintf(log_file, "gcoplog:reallymarkobject mark upval's content:%p\n", uv->v.p);
     markvalue(g, uv->v.p); /* mark its content 标记内容*/
     break;
   }
@@ -371,6 +391,8 @@ static void reallymarkobject(global_State *g, GCObject *o)
     {                               /* no user values? */
       markobjectN(g, u->metatable); /* mark its metatable */
       set2black(u);                 /* nothing else to mark */
+      fprintf(log_file, "gcoplog:reallymarkobject mark LUA_VUSERDATA :%p metatable\n", u);
+      fprintf(log_file, "gcoplog:reallymarkobject mark LUA_VUSERDATA:%p metatable\n", u);
       break;
     }
     /* else... */
@@ -591,12 +613,19 @@ static int traverseephemeron(global_State *g, Table *h, int inv)
       hasclears = 1;           /* 需要清理key key 未被标记，但是值已被外部引用，直接清理 弱key表嘛*/
       if (valiswhite(gval(n))) /*值也是白色？ 则key和value可能都未被遍历到，需要放到ephemeron表里*/
         hasww = 1;             /* white-white entry */
+      /*
+          当ephemeron中的key已经不可达时，
+          不管它是否包含了可达的value, 这些ephemeron都将存在于队列中以便以后观察
+      */
+
     }
     else if (valiswhite(gval(n)))
     { /* key已标记，但value是白色？ */
-      marked = 1;
+      marked = 1;     
       reallymarkobject(g, gcvalue(gval(n))); /* 标记值 */
-      // 重点，瞬表的hash部分要：key被标记了，才会标记value。
+      /*
+        只有当ephemeron中的key已经标记为可达，才跟踪相应的value
+      */
     }
   }
   /* link table into proper list */
@@ -904,9 +933,15 @@ static void clearbykeys(global_State *g, GCObject *l)
     for (n = gnode(h, 0); n < limit; n++)
     {
       if (iscleared(g, gckeyN(n))) /* unmarked key?  */
-        setempty(gval(n));         /* remove entry */
+        {
+          setempty(gval(n));         /* remove entry 这个操作是切断了对val的引用*/
+          fprintf(log_file, "gcoplog:clearbykeys from table:%p key:%p unmarked and remove entry (break refrence to the value obj:%p)\n", h,gckeyN(n),gcvalue(&(n->i_val)));
+        }
       if (isempty(gval(n)))        /* is entry empty? */
+      {
+        fprintf(log_file, "gcoplog:clearbykeys from table:%p entry empty and clear key (break refrence to the keyobj:%p) \n", h,gckeyN(n));
         clearkey(n);               /* clear its key */
+      }  
     }
   }
   // 为什么都是判断 value是否为空了，然后再去clear key呢,因为t[b]= nil 就是value和obj斩断引用，就是对node的value进行人工斩断
@@ -937,14 +972,23 @@ static void clearbyvalues(global_State *g, GCObject *l, GCObject *f)
     {
       TValue *o = &h->array[i];
       if (iscleared(g, gcvalueN(o))) /* 最后调用的iswhite(o) 没有被其他的引用*/
-        setempty(o);                 /* remove entry luavempty 这个其实是将value 切断引用 等于你置nil了 */
+        {
+          setempty(o);                 /* remove entry luavempty 这个其实是将value 切断引用 等于你置nil了 */
+          fprintf(log_file, "gcoplog:clearbyvalues from table:%p value unmarked and remove entry (break refrence to the value obj:%p)\n", h,gcvalue(o));
+        }
     }
     for (n = gnode(h, 0); n < limit; n++)
     {
       if (iscleared(g, gcvalueN(gval(n)))) /* unmarked value? */
+      {
         setempty(gval(n));                 /* remove entry */
+        fprintf(log_file, "gcoplog:clearbyvalues from table:%p key:%p unmarked and remove entry (break refrence to the value obj:%p)\n", h,gckeyN(n),gcvalue(&(n->i_val)));
+      }  
       if (isempty(gval(n)))                /* is entry empty? */
+      {
+        fprintf(log_file, "gcoplog:clearbyvalues from table:%p entry empty and clear key (break refrence to the key obj:%p) \n", h,gckeyN(n));
         clearkey(n);                       /* clear its key set dead key*/
+      }  
     }
   }
 }
@@ -1093,6 +1137,7 @@ static GCObject *udata2finalize(global_State *g)
   g->tobefnz = o->next; /* remove it from 'tobefnz' list */
   o->next = g->allgc;   /* return it to 'allgc' list */
   g->allgc = o;
+  fprintf(log_file, "gcoplog:udata2finalize move obj:%p from tobefnz to allgc list when call __gc \n", o);
   resetbit(o->marked, FINALIZEDBIT); /* object is "normal" again */
   if (issweepphase(g))
     makewhite(g, o); /* "sweep" object */
@@ -1180,6 +1225,7 @@ static GCObject **findlast(GCObject **p)
 （注意：finobjold1 之后的对象不可能是白色（未被标记），因此无需遍历。在增量模式下，finobjold1 为 NULL，
  此时会遍历整个列表。）
  ** finobj上还留下的是可达的。
+ 它只处理那些已经确定是垃圾的、但拥有终结器的对象
 */
 static void separatetobefnz(global_State *g, int all)
 {
@@ -1199,6 +1245,7 @@ static void separatetobefnz(global_State *g, int all)
       curr->next = *lastnext;      /* link at the end of 'tobefnz' list */
       *lastnext = curr;
       lastnext = &curr->next;
+      fprintf(log_file, "gcoplog:separatetobefnz move obj(white but has __gc):%p from finobj to tobefnz\n", curr);
     }
   }
 }
@@ -1257,6 +1304,7 @@ void luaC_checkfinalizer(lua_State *L, GCObject *o, Table *mt)
     o->next = g->finobj; /* link it in 'finobj' list */
     g->finobj = o;
     l_setbit(o->marked, FINALIZEDBIT); /* mark it as such */
+    fprintf(log_file, "gcoplog:luaC_checkfinalizer move obj(set __gc method):%p from allgc to finobj\n", o);
   }
 }
 
@@ -1810,43 +1858,49 @@ static lu_mem atomic(lua_State *L)
   convergeephemerons(g);   // 处理 ephemeron 表的标记 若键未被标记，则删除键值对；否则保留。
 
 
-  /* at this point, all strongly accessible objects are marked. */
-  /* Clear values from weak tables, before checking finalizers
+  /* at this point, all strongly accessible objects are marked.
+     Clear values from weak tables, before checking finalizers
     清理弱表中值为弱引用的无效条目（值未被标记时删除
-    weak 和 allweak：分别对应 __mode = "v" 和 __mode = "kv" 的表*/
-  fprintf(log_file, "gcoplog:atomic clearbyvalues in weak list and allweak list........\n");
+    weak 和 allweak：分别对应 __mode = "v" 和 __mode = "kv" 的表
+    处理弱表中的value entry,如果value引用的对象没有被标记，setempty val clear key
+    这样gc时就会被清理了
+  */
+  fprintf(log_file, "gcoplog:atomic clearbyvalues in weak list ........\n");
   clearbyvalues(g, g->weak, NULL);
+  fprintf(log_file, "gcoplog:atomic clearbyvalues in allweak list........\n");
   clearbyvalues(g, g->allweak, NULL);
   origweak = g->weak;
   origall = g->allweak;
   fprintf(log_file, "gcoplog:atomic separate objects to be finalized finobj--->tbbefnz........\n");
+  
+  //将finobj链表上的所有可回收(且设置了__gc元方法的obj)移动到tobefnz链表上
+  //finobj链表上是有设置了__gc元方法的obj 它只处理那些已经确定是垃圾的、但拥有终结器的对象
+  //找到所有“已经死亡”但“需要执行终结器”的对象
   separatetobefnz(g, 0); /* separate objects to be finalized finobj--->tbbefnz// 分离待终结对象 */
-  // 为什么要标记复活tobefnz上的obj呢，因为后面要调用这个obj上的__gc方法，所以要复活这个obj,所以要再次标记，否则sweep了那还怎么访问
-  //  为什么必须标记？——终结器的潜在依赖
-  //  终结器（__gc）可能：
-
-  // 访问对象自身（例如关闭对象持有的文件句柄）。
-  // 重新引用该对象（通过赋值给全局变量或其他可达对象），使对象“复活”。
-  // 依赖其他对象（例如访问对象关联的表）。
-  // 如果对象未被标记：
-
-  // 执行终结器时可能触发内存错误（对象已被回收）。
-  // 无法处理对象被“复活”的情况。
-  // 我懂了 我终于懂了啊！！！！！！！！！！！！
   fprintf(log_file, "gcoplog:atomic mark tbbefnz resurrection........\n");
+  /*
+    标记(复活)tobefnz链表上的所有对象
+    为什么要重新mark这些有__gc元方法的obj呢？
+    但是从atomic-->GCScallfin阶段中间有GCSswptobefnz阶段，所以如果你不重新标记tobefnz上的obj，那么GCSswptobefnz阶段会把obj清了，
+    就没有机会调用__gc元方法了
+    换句话说
+    终结器（__gc）的规则： 如果一个对象拥有 __gc 元方法，那么即使在本次GC周期中它不可达(无人引用)，也必须先调用它的终结器，然后才能回收它
+  */
   work += markbeingfnz(g); /* mark objects that will be finalized 标记待终结对象 mark下tobefnz链表上的*/
   fprintf(log_file, "gcoplog:atomic empty gray list........\n");
   work += propagateall(g); /* remark, to propagate 'resurrection' 传播复活对象的标记*/
   fprintf(log_file, "gcoplog:atomic second time deal ephemeron list........\n");
   convergeephemerons(g);   // 再次处理 ephemeron 表
 
-  /* at this point, all resurrected objects are marked. */
+  /* at this point, all resurrected(复活的) objects are marked. */
   /* remove dead objects from weak tables */
-  fprintf(log_file, "gcoplog:atomic clearbykeys in ephemeron list and  allweak list........\n");
+  fprintf(log_file, "gcoplog:atomic clearbykeys from ephemeron list(tables)....... \n");
   clearbykeys(g, g->ephemeron); /* clear keys from all ephemeron tables */
+
+  fprintf(log_file, "gcoplog:atomic clearbykeys from allweak list(tables)........\n");
   clearbykeys(g, g->allweak);   /* clear keys from all 'allweak' tables */
 
-  /* clear values from resurrected weak tables */
+  /* clear values from resurrected(复活的) weak tables */
   fprintf(log_file, "gcoplog:atomic clearbyvalues in weak list and  allweak list........\n");
   clearbyvalues(g, g->weak, origweak);
   clearbyvalues(g, g->allweak, origall);
@@ -1893,7 +1947,7 @@ static lu_mem singlestep(lua_State *L)
 {
   global_State *g = G(L);
   count = count + 1;
-  ShowGcState(g, "\n\n\n\n\n\n\n\n enter singlestep.................>>>>>>>>>>>>>>>>>>>>>>>>>>>>",count);
+  ShowGcState(g, "\n\n\n\n\n\n\n\n 进入 singlestep.................>>>>>>>>>>>>>>>>>>>>>>>>>>>>",count);
   lu_mem work;
   lua_assert(!g->gcstopem); /* collector is not reentrant */
   g->gcstopem = 1;          /* 禁止紧急collection */
@@ -1925,22 +1979,24 @@ static lu_mem singlestep(lua_State *L)
     fprintf(log_file, "gcoplog:singlestep entet sweep allgc list until a live(black obj) (or end of  list) \n");
     entersweep(L);                    // 进入清扫阶段
     g->GCestimate = gettotalbytes(g); /* first estimate // 更新内存估算*/
-    ;
     break;
   }
   //// 分步清扫不同对象类型：
   case GCSswpallgc:
   {                                                   /* sweep "regular" objects // 普通对象*/
+    fprintf(log_file, "gcoplog:singlestep entet sweep allgc list \n");
     work = sweepstep(L, g, GCSswpfinobj, &g->finobj); // 清扫allgc链表
     break;
   }
   case GCSswpfinobj:
   {                                                     /* sweep objects with finalizers 带终结器的对象 存放待 __gc 的对象*/
+    fprintf(log_file, "gcoplog:singlestep entet sweep finobj list \n");
     work = sweepstep(L, g, GCSswptobefnz, &g->tobefnz); // 清扫finobj链表 (有__gc元方法的表或者userdata)
     break;
   }
   case GCSswptobefnz:
   {                                          /* sweep objects to be finalized 待终结对象存放  已调 __gc 的对象*/
+    fprintf(log_file, "gcoplog:singlestep entet sweep tobefnz list \n");
     work = sweepstep(L, g, GCSswpend, NULL); // 清扫tobefnz链表 ()
     break;
   }
@@ -1956,6 +2012,7 @@ static lu_mem singlestep(lua_State *L)
   { /* call remaining finalizers */
     if (g->tobefnz && !g->gcemergency)
     {
+      fprintf(log_file, "gcoplog:singlestep runafewfinalizers \n");
       g->gcstopem = 0; /* ok collections during finalizers call _gc*/
       work = runafewfinalizers(L, GCFINMAX) * GCFINALIZECOST;
     }
@@ -1971,7 +2028,7 @@ static lu_mem singlestep(lua_State *L)
     return 0;
   }
   g->gcstopem = 0;
-  ShowGcState(g, "level singlestep.................<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",count);
+  //ShowGcState(g, "离开 singlestep.................<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",count);
   return work;
 }
 
@@ -1989,7 +2046,7 @@ void luaC_runtilstate(lua_State *L, int statesmask)
 /*
 ** Performs a basic incremental step. The debt and step size are
 ** converted from bytes to "units of work"; then the function loops
-** running single steps until adding that many units of work or
+** running single steps until adding that many units of w ork or
 ** finishing a cycle (pause state). Finally, it sets the debt that
 ** controls when next step will be performed.
 执行一个基本的增量步骤。债务（debt）和步长（step size）会从字节转换为“工作单位”；

@@ -294,7 +294,7 @@ static const char *l_str2int (const char *s, lua_Integer *result) {
       if (a >= MAXBY10 && (a > MAXBY10 || d > MAXLASTD + neg))  /* overflow? */
         return NULL;  /* do not accept it (as integer) */
       a = a * 10 + d;
-      empty = 0;
+      empty = 0;  //最大值是无符号64位 9223372036854775807
     }
   }
   while (lisspace(cast_uchar(*s))) s++;  /* skip trailing spaces */
