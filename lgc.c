@@ -1670,6 +1670,7 @@ void luaC_changemode(lua_State *L, int newmode)
   g->lastatomic = 0;
 }
 
+
 /*
 ** Does a full collection in generational mode.
 */
@@ -1911,7 +1912,20 @@ static lu_mem atomic(lua_State *L)
   fprintf(log_file, "gcoplog:atomic clearbyvalues in weak list and  allweak list........\n");
   clearbyvalues(g, g->weak, origweak);
   clearbyvalues(g, g->allweak, origall);
+  /*
 
+    实际上是分了这么两个阶段,但是为什么要分这么两个阶段呢
+    |2.3clearbyvalues(复活的weak)      ||| 1.clearbyvalues   
+    g->weak-->weak-->weak-->weak-->origweak-->weak-->weak-->weak-->weak-->null
+    
+    |2.4clearbyvalues(复活的allweak)   ||| 1.clearbyvalues
+    g->allweak-->allweak-->allweak-->allweak-->origall-->allweak-->allweak-->allweak-->allweak-->null
+    |2.2 clearbykeys (复活之前的一口气清)
+
+    
+    g->ephemeron-->ephemeron-->ephemeron-->ephemeron-->ephemeron-->ephemeron-->null
+    |2.1 clearbykeys
+  */
   luaS_clearcache(g);                         // 清理字符串缓存
   g->currentwhite = cast_byte(otherwhite(g)); /* flip current white */
   lua_assert(g->gray == NULL);
