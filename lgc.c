@@ -233,6 +233,43 @@ static void clearkey(Node *n)
 ** 不可回收的对象永远不会从弱表中移除。字符串的行为类似于“值”，因此也永远不会被移除。
 ** 对于其他对象：如果已被真正回收，则无法保留它们；
 ** 对于正在被终结处理（finalized）的对象，保留它们在键中，但不保留在值中
+
+再翻译一下:
+** 就是判断一个弱表是否要斩断对该key或者该value的引用。
+** 如果是字符串或者不可回收类型，那么不切断引用(当然他们本来就不会参与gc),
+** 如果对象没有被标记(就是对象是白色)，那么切断引用
+** 如果这个对象在被收集,如果他是key依旧要保留引用，如果他是value就不要保留引用
+** 所以这就是为什么在原子阶段中，调用separatetobefnz之前要先clearbyvalue一下!!
+** 但是为什么要这么设计呢?????????????
+** http://lua-users.org/lists/lua-l/2009-03/msg00438.html 这里有你要的答案
+** 因为 如果你把一个对象当作一个弱表的key。那么你实际上
+** local key = setmetanle({},{__gc = function() local attr = weak_tbl[key]   end})
+** local weak_tbl = setmetable({},{__mode='k'})
+** weak_tbl[key] = attr
+** key = nil
+** collectgarbage()
+** 你看到了吗，如果你separatetobefnz前调用了clearbykeys，clearbykeys会切断了这个weak_tbl里key对obj的引用
+** 然后根据逻辑，如果iscleared，那么整个条目都会被删除，也就是说表里没有xxx了
+** 然后如果这个obj的__gc里如果如果有对xxx的访问，那就访问不到了
+
+** 如果是value就不一样了
+  如果在gc阶段对值访问，
+
+  . 保留作为键的原因（Why keep as key?）
+  场景：T[object] = object_attribute （经典模式：对象到属性的映射）
+  需求：对象的终结器（__gc）可能需要读取 object_attribute 来完成清理工作
+  风险：如果GC提前清理了这个条目，终结器就无法获取关联数据，可能导致资源泄漏
+  结论：必须保留键，以保证终结器能正常工作
+  2. 移除作为值的原因（Why remove as value?）
+  场景：T[some_key] = object （对象作为存储的内容）
+  现状：object 已经"死亡"，没有强引用指向它
+  问题：如果保留，普通代码无法通过正常途径访问到这个值（因为没有它的引用）
+  结论：保留无效数据没有意义，应该立即清理
+  3. 最关键的区别（The crucial difference）
+  作为键：你需要先有 object 的引用，才能访问 T[object]
+  → 既然 object 已死，正常代码无法获得其引用，也就无法误访问
+  作为值：你可以通过遍历表等方式意外访问到已死的 object
+  → 这违反了GC的语义，可能引发不可预知的行为
 */
 static int iscleared(global_State *g, const GCObject *o)
 {
@@ -1913,6 +1950,9 @@ static lu_mem atomic(lua_State *L)
   clearbyvalues(g, g->weak, origweak);
   clearbyvalues(g, g->allweak, origall);
   /*
+
+
+    这个clearbyvalues是说如果弱表的key没有被标记，就要斩断引用
 
     实际上是分了这么两个阶段,但是为什么要分这么两个阶段呢
     |2.3clearbyvalues(复活的weak)      ||| 1.clearbyvalues   
